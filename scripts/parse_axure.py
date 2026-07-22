@@ -902,7 +902,7 @@ def format_parse_result(result):
     """将解析结果格式化为可读文本，供用户预览。"""
     lines = []
     
-    if result['type'] == 'directory':
+    if result['type'] in ('directory', 'axure_directory', 'loose_directory'):
         lines.append(f"📁 项目名称: {result['project_name']}")
         lines.append(f"📄 页面总数: {result['total_pages']}")
         lines.append("")
