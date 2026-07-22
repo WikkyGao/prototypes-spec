@@ -151,186 +151,162 @@ class AxurePageHTMLParser(HTMLParser):
         return merged
 
 
-def build_page_tree(filepath):
+def _parse_rootnodes_stream(filepath):
     """
-    从 document.js 中提取页面树结构。
-    
-    document.js 格式为变量赋值序列，如：
-    s="id",t="4qsozv",u="pageName",v="概述",w="type",x="Wireframe",y="url",z="概述.html",
-    A="lacalr",B="业务",C="业务.html",...
-    
-    变量名是递增的占位符，实际数据在值中。
-    第一个页面有显式 key（id, pageName, type, url），后续页面隐式复用相同模式。
-    
-    返回页面列表，每项包含：{pageName, url, children}
+    从 document.js 的 rootNodes 数据流中提取页面序列。
+
+    rootNodes 段的字符串值顺序流（仅取 ="..." 形式的字符串值）：
+      显式 key 模式（首条页面）：
+        'id', <id>, 'pageName', <name>, 'type', <type>, 'url', <url.html>
+      隐式模式（后续页面）：
+        <id>, <name>, <type|'Folder'>, <url.html>
+      Folder 节点（无 url，type 值为 'Folder'）：
+        <id>, <name>, 'Folder'
+      children 关键字引导嵌套数组。
+
+    本函数不依赖任何硬编码页面名，仅基于 'pageName'/'type'/'url'/'Folder'/'children'
+    等结构标记和 .html 后缀解析。
+
+    返回 (pages, raw_values)：
+      pages: [{name, url, is_folder}] 按出现顺序排列
+      raw_values: rootNodes 段内所有 ="..." 字符串值（供深度推断）
     """
     with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
     root_idx = content.find('rootNodes')
     if root_idx < 0:
-        return []
-    
-    chunk = content[root_idx:root_idx + 20000]
-    values = re.findall(r'=\"([^\"]*)\"', chunk)
-    
-    # 解析调用的函数 _(key,val,key,val,...) 格式
-    # 提取所有 key-value 对
-    # 格式: ...,"key","value",...
-    # 在 document.js 中，rootNodes 数据是 _(key,val,key,val,...) 的调用参数
-    
-    # 方法：从原始 chunk 中提取 ..."key","value"... 模式
-    # 注意值可能是字符串或数字
-    # 先把所有 =\"value\" 提取出来，然后按顺序解析
-    
-    # 从 values 中提取页面信息
-    # 页面模式: [id?], pageName, [type?], url, [children?]
-    # 第一个页面可能有显式 key
-    
-    all_pages = []  # [{name, url, isFolder, children_depth}]
-    depth = 0
-    in_children = False
-    i = 0
-    
-    # 已知的页面名称（用于识别）
-    known_page_names = {
-        '概述', '业务', '流程', '框架', '实例管理', '新增节点', '配置中心',
-        '发布', '版本管理', '服务配置文件详情', '模板列表', '认证管理', '概览',
-        '仅备份', '服务配置', 'Authentication Manager', '页面 1'
+        return [], []
+
+    chunk = content[root_idx:root_idx + 50000]
+    values = re.findall(r'="([^"]*)"', chunk)
+
+    # 终止标记：rootNodes 页面区结束后进入这些配置节
+    terminal_markers = {
+        'additionalJs', 'additionalCss', 'globalVariables',
+        'stylesheet', 'defaultStyle',
     }
-    
-    # 从 values 中识别页面
-    # 策略：找到所有 pageName → url 对
-    page_positions = []  # (index_in_values, name, url, isFolder)
-    for i in range(len(values)):
+
+    pages = []
+    i = 0
+    n = len(values)
+    while i < n:
         v = values[i]
-        
-        if v in known_page_names:
-            pname = v
-            # 查找对应的 URL
-            url = ''
-            for j in range(i + 1, min(i + 5, len(values))):
-                if values[j].endswith('.html'):
-                    url = values[j]
-                    break
-            
-            is_folder = False
-            # Folder 标记紧跟在页面名后面（1-2个位置内）
-            for j in range(i + 1, min(i + 3, len(values))):
-                if values[j] == 'Folder':
-                    is_folder = True
-                    break
-            
-            page_positions.append({
-                'name': pname,
-                'url': url,
-                'isFolder': is_folder,
-                'values_idx': i
-            })
-    
-    # 用 children 标记和 Folder 来修正深度
-    page_depths = []
+
+        # 命中终止标记，停止扫描
+        if v in terminal_markers and pages:
+            break
+
+        # 显式 key 模式：'id', <id>, 'pageName', <name>, 'type', <type>, 'url', <url.html>
+        if (v == 'id' and i + 7 < n
+                and values[i+2] == 'pageName'
+                and values[i+4] == 'type'
+                and values[i+6] == 'url'):
+            name = values[i+3]
+            is_folder = (values[i+5] == 'Folder')
+            url = values[i+7]
+            pages.append({'name': name, 'url': url, 'is_folder': is_folder})
+            i += 8
+            continue
+
+        # 隐式三元模式：<id>, <name>, <url.html>
+        if i + 2 < n and values[i+2].endswith('.html'):
+            pages.append({'name': values[i+1], 'url': values[i+2],
+                          'is_folder': False})
+            i += 3
+            continue
+
+        # 隐式 Folder 模式：<id>, <name>, 'Folder'
+        if i + 2 < n and values[i+2] == 'Folder':
+            pages.append({'name': values[i+1], 'url': '',
+                          'is_folder': True})
+            i += 3
+            continue
+
+        i += 1
+
+    return pages, values
+
+
+def build_page_tree(filepath):
+    """
+    从 document.js 中提取页面树结构。
+
+    直接基于 rootNodes 数据流解析，不依赖硬编码页面名。
+    Axure 的页面层级通过 'children' 关键字嵌套表达；Folder 节点用 'Folder' 标识。
+
+    返回页面列表，每项包含：{pageName, url, children, isFolder?}
+    """
+    pages, values = _parse_rootnodes_stream(filepath)
+    if not pages:
+        return []
+
+    # 推断每个页面的深度
+    # 策略：遍历 values，跟踪 'children' 嵌套与 'Folder' 标记
+    # 简化模型：所有页面默认 depth=0；遇到 Folder 后的子页面 depth+1
+    page_names_order = [p['name'] for p in pages]
+    depths = [0] * len(pages)
+
     current_depth = 0
-    folder_active = False  # 是否在 Folder 的子节点模式中
-    last_folder_depth = -1  # 最近 Folder 的深度
-    
-    for i, v in enumerate(values):
-        # 检测非页面数据开始（结束 Folder 子节点模式）
-        if v in ('additionalJs', 'additionalCss', 'globalVariables', 'stylesheet', 'defaultStyle'):
-            folder_active = False
-        
-        # children 标记
+    folder_active = False
+    last_folder_depth = 0
+    page_idx = 0
+
+    for v in values:
+        # 页面名匹配（按出现顺序消费）
+        if page_idx < len(pages) and v == pages[page_idx]['name']:
+            if folder_active:
+                depths[page_idx] = last_folder_depth + 1
+            else:
+                depths[page_idx] = current_depth
+            page_idx += 1
+            continue
+
         if v == 'children':
             current_depth += 1
-            folder_active = False
-        elif v == '':
-            current_depth = max(0, current_depth - 1)
             folder_active = False
         elif v == 'Folder':
             folder_active = True
             last_folder_depth = current_depth
-        
-        # 检查是否是页面名
-        if v in known_page_names:
-            # 判断深度
-            if folder_active:
-                # 当前页面是 Folder 的子节点
-                depth = last_folder_depth + 1
-            else:
-                depth = current_depth
-            
-            page_depths.append(depth)
-    
-    # 将深度应用到页面
-    for i, page in enumerate(page_positions):
-        if i < len(page_depths):
-            page['depth'] = page_depths[i]
-    
+        elif v in ('additionalJs', 'additionalCss', 'globalVariables',
+                   'stylesheet', 'defaultStyle'):
+            folder_active = False
+            current_depth = 0
+
     # 根据深度构建树
     root = []
-    stack = [root]  # 栈顶是当前父节点的 children 列表
-    
-    for page in page_positions:
-        depth = page['depth']
-        
-        # 弹出栈直到对应深度
+    stack = [root]  # stack[d] 是深度 d 的兄弟列表
+
+    for idx, page in enumerate(pages):
+        depth = depths[idx]
+
+        # 弹栈到目标深度
         while len(stack) > depth + 1:
             stack.pop()
-        
-        # 确保栈长度足够
+        # 补栈
         while len(stack) <= depth:
-            if stack[-1]:
-                last_node = stack[-1][-1]
-                last_node['children'] = last_node.get('children', [])
-                stack.append(last_node['children'])
-            else:
-                stack.append([])
-        
+            stack.append([])
+
         node = {
             'pageName': page['name'],
             'url': page['url'],
             'children': []
         }
-        if page['isFolder']:
+        if page['is_folder']:
             node['isFolder'] = True
-        
         stack[depth].append(node)
-    
+
     return root
 
 
 def extract_pages_flat(filepath):
     """从 document.js 中提取扁平页面列表（不包含树结构）。"""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-
-    root_idx = content.find('rootNodes')
-    if root_idx < 0:
-        return []
-    
-    chunk = content[root_idx:root_idx + 20000]
-    values = re.findall(r'=\"([^\"]*)\"', chunk)
-    
-    # 已知的页面名称
-    known_page_names = {
-        '概述', '业务', '流程', '框架', '实例管理', '新增节点', '配置中心',
-        '发布', '版本管理', '服务配置文件详情', '模板列表', '认证管理', '概览',
-        '仅备份', '服务配置', 'Authentication Manager', '页面 1'
-    }
-    
-    pages = []
-    for i, v in enumerate(values):
-        if v in known_page_names:
-            # 查找对应的 URL
-            url = ''
-            for j in range(i + 1, min(i + 5, len(values))):
-                if values[j].endswith('.html'):
-                    url = values[j]
-                    break
-            if url:
-                pages.append({'pageName': v, 'url': url})
-    
-    return pages
+    pages, _ = _parse_rootnodes_stream(filepath)
+    return [
+        {'pageName': p['name'], 'url': p['url']}
+        for p in pages
+        if not p['is_folder'] and p['url'].endswith('.html')
+    ]
 
 
 def parse_page_html(filepath):
