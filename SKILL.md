@@ -279,6 +279,114 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 - md 交付物各自独立单文件，不合并
 - 如果用户指定了输出位置，则保存到指定位置
 
+### 6. 可选流程：调用 requirement-analysis 进行需求澄清与分析
+
+**触发时机**：在步骤 5 完成交付物生成、确认所有文件已写入 `output/` 之后。
+
+**前置条件**（任一满足即可询问）：
+
+- 已生成 PRD（`output/PRD.md`）
+- 已生成功能清单（`output/功能清单.xlsx`）
+- 已生成用户故事（`output/用户故事.md`）
+
+> 若本次仅生成了页面跳转关系图/数据字典/开发计划等非"需求主体"交付物，仍可询问，但向用户说明"需求澄清对 PRD/功能清单类交付物收益更大"。
+
+#### 6.1 询问用户是否调用
+
+生成交付物后，**主动询问**用户是否需要调用 `requirement-analysis` skill 进行需求澄清和分析：
+
+> 📦 交付物已生成至 `output/` 目录。
+>
+> 原型解析生成的 PRD/功能清单基于原型可见内容推断，可能存在：
+> - 🔴 模糊描述（如"管理用户信息"无具体操作）
+> - 🟡 边界不明（如"导出数据"未说明格式/范围）
+> - 🟢 缺失上下文（如审批流程未定义审批角色）
+>
+> 是否调用 `requirement-analysis` skill 进行需求澄清与分析？
+>
+> - **A. ✅ 调用** — 启动 `requirement-analysis` skill，对已生成的 PRD/功能清单进行需求澄清、冲突检测、INVEST 质量评估
+> - **B. ⏭️ 跳过** — 当前交付物已满足需求，流程结束
+
+#### 6.2 调用 requirement-analysis skill
+
+用户选择 A 后，**调用 `requirement-analysis` skill**，并传入以下上下文：
+
+**传入参数**：
+
+- **数据来源**：本次原型解析生成的交付物文件路径
+  - `output/PRD.md`（主输入，PRD 是 requirement-analysis 的核心处理对象）
+  - `output/功能清单.xlsx`（若已生成，作为补充输入）
+  - `output/用户故事.md`（若已生成，作为补充输入）
+  - `output/_prototype.json`（解析 JSON，供 requirement-analysis 读取原始页面数据）
+- **原型信息**：原型目录路径、工具类型、页面数、页面树
+- **本次生成范围**：用户在步骤 3 选中的页面集合
+
+**调用方式**：
+
+使用 `use_skill` 工具调用 `requirement-analysis` skill，arguments 中传入上述上下文。调用后由 `requirement-analysis` skill 接管流程，执行其 8 阶段工作流（文档扫描 → 解析 → 功能提取 → 智能整合 → 需求澄清 → 用户确认 → 生成 PRD → 可选推送）。
+
+**调用示例**：
+
+```
+use_skill:
+  name: requirement-analysis
+  arguments: |
+    数据来源：本次原型解析生成的交付物
+    原型目录：/Users/wikky/Documents/Axure/HTML/v2.2.3x 线索自动分配
+    工具类型：axure
+    页面数：8
+    已生成交付物：
+      - output/PRD.md（主输入）
+      - output/用户故事.md（补充输入）
+      - output/_prototype.json（解析 JSON）
+    请对已生成的 PRD 进行需求澄清、冲突检测与 INVEST 质量评估。
+```
+
+#### 6.3 requirement-analysis skill 接管后的行为
+
+`requirement-analysis` skill 被调用后，将基于传入的 PRD/功能清单执行：
+
+1. **阶段 1-2 文档扫描与解析**：读取 `output/PRD.md`、`output/功能清单.xlsx` 等，解析为统一中间格式
+2. **阶段 3 功能提取**：从 PRD 的功能清单章节提取原子级功能
+3. **阶段 4 智能整合**：语义去重、信息补充、冲突检测
+4. **阶段 4.5 整合摘要确认**：展示整合结果供用户确认
+5. **阶段 5 需求澄清**：检测模糊描述、边界不明、歧义表述等问题，按严重程度分级，逐批与用户交互澄清
+6. **阶段 6 用户确认**：确认所有 🔴 严重矛盾已解决
+7. **阶段 7 生成 PRD**：生成最终的标准化 PRD.md（覆盖或增量更新 `output/PRD.md`）
+8. **阶段 8 PRD 推送（可选）**：询问用户是否推送到飞书/Git/FTP 等
+
+**输出物**：
+
+- `output/PRD.md` — 经需求澄清与质量评估后的最终 PRD（覆盖原型解析生成的初版 PRD）
+- `output/需求澄清报告.md` — requirement-analysis 生成的澄清报告（若该 skill 支持）
+- `output/质量评估报告.md` — INVEST 六维质量评估报告（若该 skill 支持）
+
+#### 6.4 边界处理
+
+- **用户选择 B（跳过）** → 流程直接结束，不调用 requirement-analysis
+- **requirement-analysis skill 未安装** → 检测 `~/.atomcode/skills/requirement-analysis/` 是否存在；不存在则告知用户"requirement-analysis skill 未安装，跳过需求澄清，可手动安装后重试"，流程结束
+- **requirement-analysis skill 调用失败** → 捕获错误，告知用户"需求澄清调用失败：[错误信息]，当前交付物保留在 output/ 目录"，流程结束
+- **用户在步骤 4 已明确说"调用 requirement-analysis"或"进行需求澄清"** → 跳过 6.1 询问，直接执行 6.2 调用
+- **用户在步骤 4 已明确说"不需要需求澄清"** → 跳过整个步骤 6
+- **PRD 未生成但功能清单已生成** → 仍可调用，requirement-analysis 会以功能清单为主输入反推 PRD
+- **本次仅生成了页面跳转关系图** → 询问时说明"需求澄清对 PRD/功能清单类交付物收益更大，当前仅有页面跳转关系图，建议先在步骤 4 选择生成 PRD"
+
+#### 6.5 流程总览
+
+```
+步骤 1-2: 识别原型类型 → 解析原型结构
+    ↓
+步骤 3: 用户选择页面范围
+    ↓
+步骤 4: 用户选择交付物类型
+    ↓
+步骤 5: 生成交付物 → 写入 output/
+    ↓
+步骤 6: 询问是否调用 requirement-analysis 进行需求澄清
+    ├── A. 调用 → use_skill("requirement-analysis", ...) → requirement-analysis 接管 8 阶段流程
+    └── B. 跳过 → 流程结束
+```
+
 ## 便签/备注说明的解析与纳入
 
 **已支持**：解析脚本 `parse_axure.py` 在解析每页 HTML 时已提取便签（Axure 中以 `id` 后缀 `_ann` 的 div 标识）和矩形内备注说明（以"备注"字样开头的矩形/文本段落），归入每页的 `notes` 字段。
