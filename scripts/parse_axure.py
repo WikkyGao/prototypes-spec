@@ -32,11 +32,33 @@ class AxurePageHTMLParser(HTMLParser):
         self.current_rect_note = []
         self.in_rect_note_span = False
         self.rect_note_depth = 0
+        # 截图拼接识别
+        self.images = []            # [{src, width, height, style}]
+        self.bg_images = []         # 重复 background-image 切片
+        self.abs_positioned_count = 0  # 绝对定位元素计数
+        # 表单/筛选区域识别
+        self.form_field_labels = []  # 页面上出现的字段标签（按顺序）
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
         element_id = attrs_dict.get('id', '')
         classes = attrs_dict.get('class', '')
+        style = attrs_dict.get('style', '') or ''
+
+        # 截图拼接识别：累计绝对定位元素
+        if 'absolute' in style.lower():
+            self.abs_positioned_count += 1
+
+        # 截图拼接识别：收集 <img>
+        if tag == 'img':
+            self._track_image(attrs_dict)
+            return
+
+        # 截图拼接识别：background-image 切片
+        bg_match = re.search(r'background(?:-image)?\s*:\s*url\(([^)]+)\)',
+                             style, re.IGNORECASE)
+        if bg_match:
+            self.bg_images.append(bg_match.group(1))
 
         if tag == 'title':
             self.in_title = True
@@ -65,6 +87,16 @@ class AxurePageHTMLParser(HTMLParser):
             # 标记 rect_note_depth 进入矩形控件层
             if '备注' in element_id or 'note' in element_id.lower() or '_ann' in element_id:
                 self.rect_note_depth += 1
+
+    def _track_image(self, attrs_dict):
+        """收集 <img> 元素用于截图拼接识别。"""
+        src = attrs_dict.get('src', '') or ''
+        width = attrs_dict.get('width', '') or ''
+        height = attrs_dict.get('height', '') or ''
+        style = attrs_dict.get('style', '') or ''
+        self.images.append({
+            'src': src, 'width': width, 'height': height, 'style': style,
+        })
 
     def handle_endtag(self, tag):
         if tag == 'title':
@@ -149,6 +181,410 @@ class AxurePageHTMLParser(HTMLParser):
                 merged.append(n)
                 seen.add(n)
         return merged
+
+
+# ---------------------------------------------------------------------------
+# 页面分类（page category）
+# ---------------------------------------------------------------------------
+
+# 页面分类标签：扩展时可在此补充
+PAGE_CATEGORIES = [
+    'admin_console',      # 管理后台页面（左侧菜单+表格+筛选区+分页）
+    'config_page',        # 配置页（表单为主，含保存/重置）
+    'mobile_page',        # 移动端页面（窄屏 viewport / 手机外框）
+    'flow_diagram',       # 流程图 / 拓扑图（纯图形/连线，无表单）
+    'login_page',         # 登录 / 注册 / 验证码页
+    'list_page',          # 列表页（表格 / 卡片列表）
+    'detail_page',        # 详情页（标题 + 字段键值对）
+    'form_page',          # 表单页（输入控件为主）
+    'modal_dialog',       # 弹窗 / 对话框
+    'dashboard',          # 仪表盘 / 数据看板
+    'image_composite',    # 截图拼接页（由多张截图拼出来）
+    'unknown',            # 无法判定
+]
+
+# 分类识别关键词字典：中文 + 英文，用于匹配页面名 / 文本内容
+_CATEGORY_KEYWORDS = {
+    'login_page': [
+        '登录', '登陆', '注册', '验证码', '找回密码', '忘记密码',
+        'login', 'register', 'signin', 'sign in', 'signup', 'sign up',
+    ],
+    'admin_console': [
+        '管理后台', '后台管理', '运营后台', '系统管理', '控制台',
+        'admin', 'console', 'backstage',
+    ],
+    'config_page': [
+        '配置', '设置', '参数设置', '系统设置', '规则配置',
+        'config', 'setting', 'preference',
+    ],
+    'mobile_page': [
+        '移动端', '手机端', 'app端', 'h5',
+        'mobile', 'viewport',
+    ],
+    'flow_diagram': [
+        '流程图', '流程', '拓扑', '节点', '连线',
+        'flowchart', 'topology',
+    ],
+    'dashboard': [
+        '仪表盘', '看板', '大盘', '首页', 'dashboard', 'overview',
+    ],
+}
+
+# 控件类型 → 推断的页面分类（当文本匹配不足时按控件组合判断）
+def _infer_category_from_widgets(widgets):
+    widget_types = [w.get('type', '') or w.get('friendlyType', '')
+                    for w in widgets]
+    type_set = set(widget_types)
+
+    # 表格 + 分页 + 下拉筛选 → 管理后台
+    has_table = any('表格' in t or 'table' in t.lower() for t in widget_types)
+    has_dropdown = any('下拉' in t or 'dropdown' in t.lower()
+                       for t in widget_types)
+    has_button = any('按钮' in t or 'button' in t.lower()
+                     for t in widget_types)
+    has_input = any('输入框' in t or '文本框' in t
+                    or 'input' in t.lower() or 'textarea' in t.lower()
+                    for t in widget_types)
+    has_img = any('图片' in t or 'image' in t.lower() or 'img' in t.lower()
+                  for t in widget_types)
+
+    if has_table and (has_dropdown or has_button):
+        return 'admin_console'
+    if has_img and not has_input and not has_table:
+        return 'flow_diagram'
+    if has_input and not has_table:
+        return 'form_page'
+    if has_table and not has_dropdown:
+        return 'list_page'
+    return None
+
+
+def classify_page(page):
+    """
+    根据页面名、文本、控件推断页面分类。
+
+    返回 PAGE_CATEGORIES 中的一个标签。
+    优先级：截图拼接识别 > 关键词匹配 > 控件推断 > unknown
+    """
+    page_name = page.get('pageName', '') or ''
+    texts = page.get('texts', []) or []
+    widgets = page.get('widgets', []) or []
+    text_blob = ' '.join(texts)
+    name_blob = page_name
+
+    # 1) 关键词匹配：同时考虑页面名和文本
+    matches = []
+    for cat, kws in _CATEGORY_KEYWORDS.items():
+        for kw in kws:
+            if kw in name_blob or kw in text_blob:
+                matches.append(cat)
+                break
+    # 取匹配数最多的一类；若多个并列，admin_console > config_page > 其他
+    if matches:
+        priority = ['admin_console', 'config_page', 'mobile_page',
+                    'flow_diagram', 'login_page', 'dashboard']
+        for p in priority:
+            if p in matches:
+                return p
+        return matches[0]
+
+    # 2) 控件推断
+    inferred = _infer_category_from_widgets(widgets)
+    if inferred:
+        return inferred
+
+    # 3) 截图拼接（由调用方先标记 page['is_screenshot_composite']）
+    if page.get('is_screenshot_composite'):
+        return 'image_composite'
+
+    return 'unknown'
+
+
+# ---------------------------------------------------------------------------
+# 截图拼接识别
+# ---------------------------------------------------------------------------
+
+def detect_screenshot_composite(parser, texts):
+    """
+    判断页面是否由截图拼接而成。
+
+    识别特征（满足任一即判定为拼接截图）：
+      - 页面含多个 <img>，且至少一张宽度 >= 600px 或 style 含大尺寸
+      - 多张 background-image 切片（>= 2 个不同 url）
+      - 文本内容极少（<= 5 条）且图片数 >= 3
+      - 全部内容只有一张超大图（width >= 800）且几乎没有 span 文本
+
+    参数:
+        parser: AxurePageHTMLParser 实例（含 images/bg_images）
+        texts:  页面 span 文本列表
+
+    返回:
+        (is_composite: bool, evidence: str)
+    """
+    images = parser.images
+    bg_images = parser.bg_images
+    text_count = len(texts)
+
+    # 多张大图
+    big_imgs = []
+    for img in images:
+        w = img.get('width', '') or ''
+        h = img.get('height', '') or ''
+        style = img.get('style', '') or ''
+        # 从 width 属性
+        try:
+            wi = int(re.match(r'(\d+)', w).group(1)) if w else 0
+        except (AttributeError, ValueError):
+            wi = 0
+        # 从 style width
+        if wi == 0:
+            m = re.search(r'width\s*:\s*(\d+)', style, re.IGNORECASE)
+            if m:
+                wi = int(m.group(1))
+        if wi >= 600:
+            big_imgs.append(img)
+
+    # 多张 background-image 切片（不同 url）
+    unique_bg = set()
+    for bg in bg_images:
+        # 去除查询参数后比较
+        base = bg.split('?')[0]
+        unique_bg.add(base)
+
+    # 条件 1：多张大图（>=2 张宽度 >=600）
+    if len(big_imgs) >= 2:
+        return True, f"检测到 {len(big_imgs)} 张大尺寸图片(宽>=600px)，疑似截图拼接"
+
+    # 条件 2：多张不同 background-image 切片
+    if len(unique_bg) >= 2:
+        return True, f"检测到 {len(unique_bg)} 个不同的 background-image 切片，疑似截图拼接"
+
+    # 条件 3：文本极少 + 图片数 >= 3
+    if text_count <= 5 and len(images) >= 3:
+        return True, f"文本仅 {text_count} 条但图片 {len(images)} 张，疑似截图拼接"
+
+    # 条件 4：单张超大图 + 几乎无文本
+    for img in images:
+        w = img.get('width', '') or ''
+        try:
+            wi = int(re.match(r'(\d+)', w).group(1)) if w else 0
+        except (AttributeError, ValueError):
+            wi = 0
+        style = img.get('style', '') or ''
+        if wi == 0:
+            m = re.search(r'width\s*:\s*(\d+)', style, re.IGNORECASE)
+            if m:
+                wi = int(m.group(1))
+        if wi >= 800 and text_count <= 5:
+            return True, f"检测到一张 {wi}px 宽的超大图且文本仅 {text_count} 条，疑似截图拼接"
+
+    return False, ''
+
+
+# ---------------------------------------------------------------------------
+# 筛选区域识别（管理后台常见）
+# ---------------------------------------------------------------------------
+
+# 筛选区常见关键词：中文 + 英文
+_FILTER_AREA_KEYWORDS = [
+    '筛选', '过滤', '查询条件', '搜索条件', '查询', '检索',
+    'filter', 'search', 'query',
+]
+
+# 筛选区常见操作按钮
+_FILTER_ACTION_KEYWORDS = [
+    '查询', '搜索', '筛选', '重置', '清空',
+    'search', 'filter', 'reset', 'clear',
+]
+
+# 常见筛选字段名后缀（用于识别字段标签）
+_FILTER_FIELD_HINTS = [
+    '名称', '编号', '状态', '时间', '日期', '类型', '分类', '部门',
+    '创建时间', '更新时间', '手机', '邮箱', '地区', '标签', '级别',
+]
+
+
+def detect_filter_area(parser, texts, widgets):
+    """
+    识别管理后台页面的筛选区域。
+
+    筛选区识别逻辑：
+      1) 文本中含筛选关键词（筛选/查询/搜索条件等）
+      2) 或文本中含筛选操作按钮（查询/搜索/重置/清空）且同时存在下拉框/输入框
+      3) 字段标签：从 texts 中按出现顺序提取，匹配 _FILTER_FIELD_HINTS 的优先纳入
+
+    返回:
+        {
+            'has_filter': bool,
+            'filter_fields': [{label, control_type, required, default_value, note}],
+            'filter_actions': [str],   # 查询/重置等按钮
+        }
+    """
+    text_blob = ' '.join(texts)
+
+    has_filter_kw = any(kw in text_blob for kw in _FILTER_AREA_KEYWORDS)
+    has_action_kw = any(kw in text_blob for kw in _FILTER_ACTION_KEYWORDS)
+
+    # 控件类型收集
+    widget_types = [w.get('type', '') or w.get('friendlyType', '')
+                    for w in widgets]
+    has_dropdown = any('下拉' in t or 'dropdown' in t.lower()
+                       for t in widget_types)
+    has_input = any('输入框' in t or '文本框' in t
+                    or 'input' in t.lower() or 'textarea' in t.lower()
+                    for t in widget_types)
+    has_date = any('日期' in t or 'date' in t.lower()
+                   for t in widget_types)
+
+    # 判定是否存在筛选区
+    has_filter = False
+    if has_filter_kw and (has_dropdown or has_input or has_date):
+        has_filter = True
+    elif has_action_kw and (has_dropdown or has_input or has_date):
+        has_filter = True
+
+    if not has_filter:
+        return {
+            'has_filter': False,
+            'filter_fields': [],
+            'filter_actions': [],
+        }
+
+    # 提取筛选字段：按 texts 出现顺序，匹配 HINTS 或位于筛选关键词前后的标签
+    filter_fields = []
+    seen_labels = set()
+    for t in texts:
+        # 跳过按钮文字/操作文字
+        if t in _FILTER_ACTION_KEYWORDS or t in _FILTER_AREA_KEYWORDS:
+            continue
+        # 匹配字段提示后缀
+        is_field_label = any(t.endswith(hint) or hint in t
+                              for hint in _FILTER_FIELD_HINTS)
+        # 短文本（<=10 字符）且以"："或":"结尾也视为字段标签
+        ends_with_colon = t.endswith('：') or t.endswith(':')
+        if (is_field_label or ends_with_colon) and t not in seen_labels:
+            filter_fields.append({
+                'label': t,
+                'control_type': '待确认',     # 不臆想，从页面控件对应
+                'required': '待确认',
+                'default_value': '待确认',
+                'note': '从页面文本提取的字段标签，控件类型/必填/默认值需对照原型确认',
+            })
+            seen_labels.add(t)
+
+    # 提取筛选操作按钮
+    filter_actions = [t for t in texts if t in _FILTER_ACTION_KEYWORDS]
+    # 去重保持顺序
+    seen_actions = set()
+    dedup_actions = []
+    for a in filter_actions:
+        if a not in seen_actions:
+            dedup_actions.append(a)
+            seen_actions.add(a)
+
+    return {
+        'has_filter': True,
+        'filter_fields': filter_fields,
+        'filter_actions': dedup_actions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 字段说明严格基于页面出现内容（禁止臆想）
+# ---------------------------------------------------------------------------
+
+def extract_page_fields_strict(texts, widgets, page_name=''):
+    """
+    严格基于页面可见内容提取字段说明，禁止凭空臆想。
+
+    提取规则：
+      - 字段标签必须出现在页面 texts 中（不臆想）
+      - 字段类型从对应控件类型推断（下拉/输入框/日期/单选/复选），
+        若无控件对应则标注"待确认"
+      - 必填/默认值/校验规则若原型未明确显示，一律标"待确认"，
+        不得凭空臆想
+      - 遇到模糊字段（如标签后无控件、控件无标签），归入 ambiguous_fields，
+        需要先和用户确认再写入 PRD/数据字典
+
+    返回:
+        {
+            'fields': [{name, label, type, required, default_value, note, source}],
+            'ambiguous_fields': [{label, reason, suggested_type}],
+        }
+    """
+    # 控件类型清单
+    widget_types = [w.get('type', '') or w.get('friendlyType', '')
+                    for w in widgets]
+    has_dropdown = any('下拉' in t for t in widget_types)
+    has_date = any('日期' in t or 'date' in t.lower()
+                   for t in widget_types)
+    has_radio = any('单选' in t for t in widget_types)
+    has_checkbox = any('复选' in t for t in widget_types)
+    has_input = any('输入框' in t or '文本框' in t
+                    or 'input' in t.lower() for t in widget_types)
+
+    fields = []
+    ambiguous_fields = []
+    seen_labels = set()
+
+    for idx, t in enumerate(texts):
+        # 字段标签特征：以":"或"："结尾，或匹配常见字段后缀
+        ends_with_colon = t.endswith('：') or t.endswith(':')
+        matches_hint = any(hint in t for hint in _FILTER_FIELD_HINTS)
+        if not (ends_with_colon or matches_hint):
+            continue
+        # 跳过操作按钮/筛选关键词
+        if t in _FILTER_ACTION_KEYWORDS or t in _FILTER_AREA_KEYWORDS:
+            continue
+
+        label = t
+        # 推断控件类型：若该标签后紧跟"请选择"则下拉，"请输入"则输入框
+        next_text = texts[idx + 1] if idx + 1 < len(texts) else ''
+        control_type = '待确认'
+        if next_text:
+            if '请选择' in next_text or '请选择' in next_text:
+                control_type = '下拉选择(dropdown)'
+            elif '请输入' in next_text or '请填写' in next_text:
+                control_type = '输入框(input)'
+            elif '请选择日期' in next_text or '选择日期' in next_text:
+                control_type = '日期选择器(date picker)'
+
+        # 全局控件类型补判
+        if control_type == '待确认':
+            if has_dropdown and not has_input:
+                control_type = '下拉选择(dropdown)（推测，需确认）'
+            elif has_date and any('时间' in label or '日期' in label
+                                   for _ in [0]):
+                control_type = '日期选择器(date picker)（推测，需确认）'
+
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+
+        field_info = {
+            'name': '',  # 英文字段名需用户/后端确认，不臆想
+            'label': label,
+            'type': control_type,
+            'required': '待确认',      # 原型未明确 * 必填符号时不得假设
+            'default_value': '待确认', # 原型未显示默认值时不得假设
+            'note': '字段标签来源于页面文本，类型/必填/默认值需对照原型确认',
+            'source': 'page_text',
+        }
+
+        # 模糊字段：标签后无对应控件文本，或类型完全无法推断
+        if control_type == '待确认':
+            ambiguous_fields.append({
+                'label': label,
+                'reason': '未在页面找到对应控件类型，无法确定是输入框/下拉/日期等',
+                'suggested_type': '待用户确认',
+            })
+
+        fields.append(field_info)
+
+    return {
+        'fields': fields,
+        'ambiguous_fields': ambiguous_fields,
+    }
 
 
 def _parse_rootnodes_stream(filepath):
@@ -310,21 +746,50 @@ def extract_pages_flat(filepath):
 
 
 def parse_page_html(filepath):
-    """解析单个页面 HTML 文件，提取文本内容、控件信息和便签/备注说明。"""
+    """解析单个页面 HTML 文件，提取文本内容、控件信息、便签/备注说明，
+    并附加：
+      - is_screenshot_composite / screenshot_evidence：截图拼接识别
+      - strict_fields / ambiguous_fields：严格基于页面内容的字段说明
+      - filter_area：筛选区域识别（管理后台常见）
+    分类（page_category）由 classify_page 统一在页面层推断。
+    """
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             html_content = f.read()
     except (FileNotFoundError, IOError):
-        return {'title': '', 'texts': [], 'widgets': [], 'notes': []}
+        return {
+            'title': '', 'texts': [], 'widgets': [], 'notes': [],
+            'is_screenshot_composite': False, 'screenshot_evidence': '',
+            'strict_fields': [], 'ambiguous_fields': [],
+            'filter_area': {'has_filter': False,
+                             'filter_fields': [], 'filter_actions': []},
+        }
 
     parser = AxurePageHTMLParser()
     parser.feed(html_content)
 
+    texts = parser.texts
+    widgets = parser.widget_comments
+
+    # 截图拼接识别
+    is_composite, evidence = detect_screenshot_composite(parser, texts)
+
+    # 严格字段提取（禁止臆想）
+    strict = extract_page_fields_strict(texts, widgets)
+
+    # 筛选区域识别
+    filter_area = detect_filter_area(parser, texts, widgets)
+
     return {
         'title': parser.title,
-        'texts': parser.texts,
-        'widgets': parser.widget_comments,
+        'texts': texts,
+        'widgets': widgets,
         'notes': parser.get_notes(),
+        'is_screenshot_composite': is_composite,
+        'screenshot_evidence': evidence,
+        'strict_fields': strict['fields'],
+        'ambiguous_fields': strict['ambiguous_fields'],
+        'filter_area': filter_area,
     }
 
 
@@ -541,7 +1006,7 @@ def parse_mockplus_directory(directory_path):
         page_name = html_file.replace('.html', '')
         
         html_data = parse_page_html(html_path)
-        
+
         page_info = {
             'pageName': page_name,
             'url': html_file,
@@ -550,7 +1015,17 @@ def parse_mockplus_directory(directory_path):
             'notes': html_data.get('notes', []),
             'has_html': True,
             'has_data_js': False,
+            'is_screenshot_composite': html_data.get('is_screenshot_composite', False),
+            'screenshot_evidence': html_data.get('screenshot_evidence', ''),
+            'strict_fields': html_data.get('strict_fields', []),
+            'ambiguous_fields': html_data.get('ambiguous_fields', []),
+            'filter_area': html_data.get('filter_area', {
+                'has_filter': False,
+                'filter_fields': [],
+                'filter_actions': [],
+            }),
         }
+        page_info['page_category'] = classify_page(page_info)
         result['pages'].append(page_info)
 
     result['total_pages'] = len(result['pages'])
@@ -792,6 +1267,15 @@ def _parse_axure_full(directory_path):
             'interactions': [],
             'has_html': os.path.exists(html_path),
             'has_data_js': os.path.exists(data_js_path),
+            'is_screenshot_composite': False,
+            'screenshot_evidence': '',
+            'strict_fields': [],
+            'ambiguous_fields': [],
+            'filter_area': {
+                'has_filter': False,
+                'filter_fields': [],
+                'filter_actions': [],
+            },
         }
 
         # 解析 HTML
@@ -800,6 +1284,11 @@ def _parse_axure_full(directory_path):
             page_info['texts'] = html_data['texts']
             page_info['html_widgets'] = html_data['widgets']
             page_info['notes'] = html_data.get('notes', [])
+            page_info['is_screenshot_composite'] = html_data.get('is_screenshot_composite', False)
+            page_info['screenshot_evidence'] = html_data.get('screenshot_evidence', '')
+            page_info['strict_fields'] = html_data.get('strict_fields', [])
+            page_info['ambiguous_fields'] = html_data.get('ambiguous_fields', [])
+            page_info['filter_area'] = html_data.get('filter_area', page_info['filter_area'])
 
         # 解析 data.js
         if os.path.exists(data_js_path):
@@ -807,6 +1296,7 @@ def _parse_axure_full(directory_path):
             page_info['widgets'] = js_data['widgets']
             page_info['interactions'] = js_data['interactions']
 
+        page_info['page_category'] = classify_page(page_info)
         result['pages'].append(page_info)
 
     return result
