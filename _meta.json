@@ -1,0 +1,64 @@
+{
+  "name": "prototypes-spec",
+  "display_name": "原型→开发交付物生成器",
+  "version": "1.0.0",
+  "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划等开发交付物。",
+  "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, and development plans.",
+  "author": {
+    "name": "WikkyGao",
+    "email": "",
+    "url": ""
+  },
+  "license": "MIT",
+  "homepage": "",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:WikkyGao/prototypes-spec.git"
+  },
+  "tags": ["prototype", "axure", "prd", "specification", "product-management", "html-parser", "automation"],
+  "triggers": ["Axure原型", "原型HTML", "原型转PRD", "原型解析", "prototype", "页面结构", "开发交付物"],
+  "platform": "atomcode",
+  "min_agent_version": "1.0.0",
+  "work_modes": ["standard"],
+  "supported_formats": [
+    {"format": "HTML (Axure RP)", "description": "页面树/控件/交互全提取", "priority": 1},
+    {"format": "HTML (Mockplus)", "description": "离线演示包：页面文本和控件", "priority": 2},
+    {"format": "HTML (MasterGo)", "description": "离线标注导出：画板信息", "priority": 3},
+    {"format": "JSON (Lanhu)", "description": "Schema JSON 或导出 HTML", "priority": 4},
+    {"format": "Generic HTML", "description": "退化为通用 HTML 解析", "priority": 5}
+  ],
+  "output": {
+    "deliverables": ["PRD.md", "功能清单.md", "测试用例.md", "数据字典.md", "页面跳转关系图.md", "用户故事.md", "开发计划.md"],
+    "format": "markdown"
+  },
+  "dependencies": {
+    "required": {
+      "python3": "运行时依赖",
+      "beautifulsoup4": "HTML 解析 (pip install beautifulsoup4)"
+    },
+    "scripts": {
+      "parse_axure.py": "Axure HTML 解析引擎",
+      "generate_feature_list.py": "功能清单生成",
+      "generate_test_cases.py": "测试用例生成",
+      "generate_data_dict.py": "数据字典生成",
+      "generate_page_flow.py": "页面跳转关系图生成",
+      "generate_user_stories.py": "用户故事生成",
+      "generate_dev_plan.py": "开发计划生成"
+    }
+  },
+  "features": [
+    "多原型工具支持 (Axure/Mockplus/MasterGo/蓝湖)",
+    "自动识别页面结构、控件和交互",
+    "7 种开发交付物一键生成",
+    "页面分类与截图拼接识别",
+    "便签/备注说明纳入",
+    "通用 HTML 解析兜底"
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2026-07-27",
+      "changes": ["初始发布", "支持 4 种原型工具解析", "7 种开发交付物生成"]
+    }
+  ]
+}
