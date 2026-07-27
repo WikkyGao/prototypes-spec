@@ -1,5 +1,7 @@
 ---
 name: prototypes-spec
+slug: prototypes-spec
+displayName: pencil-designer
 description: >
   从原型工具导出的 HTML 目录（或单个 HTML 文件）中自动识别页面结构、页面内容、控件和交互，
   生成 PRD（产品需求文档）、功能清单、测试用例、数据字典等开发交付物。
@@ -118,31 +120,31 @@ python3 scripts/parse_axure.py <页面.html>
 
 每页解析结果新增以下字段，所有交付物（PRD/功能清单/数据字典等）都应基于这些字段生成：
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `page_category` | string | 页面分类标签，见下表 |
-| `is_screenshot_composite` | bool | 页面是否由多张截图拼出来 |
-| `screenshot_evidence` | string | 截图拼接判定的证据描述 |
-| `strict_fields` | list | 严格基于页面出现内容提取的字段说明（禁止臆想） |
-| `ambiguous_fields` | list | 模糊字段（标签后无控件/类型无法推断），需先与用户确认再写入 PRD/数据字典 |
-| `filter_area` | dict | 筛选区域识别（管理后台常见），含 `has_filter`/`filter_fields`/`filter_actions` |
+| 字段                        | 类型     | 说明                                                             |
+| ------------------------- | ------ | -------------------------------------------------------------- |
+| `page_category`           | string | 页面分类标签，见下表                                                     |
+| `is_screenshot_composite` | bool   | 页面是否由多张截图拼出来                                                   |
+| `screenshot_evidence`     | string | 截图拼接判定的证据描述                                                    |
+| `strict_fields`           | list   | 严格基于页面出现内容提取的字段说明（禁止臆想）                                        |
+| `ambiguous_fields`        | list   | 模糊字段（标签后无控件/类型无法推断），需先与用户确认再写入 PRD/数据字典                        |
+| `filter_area`             | dict   | 筛选区域识别（管理后台常见），含 `has_filter`/`filter_fields`/`filter_actions` |
 
 **页面分类标签（page_category）：**
 
-| 标签 | 含义 | 识别依据 |
-|------|------|----------|
-| `admin_console` | 管理后台页面 | 含"管理后台/后台管理/控制台"等关键词，或 表格+下拉+按钮 控件组合 |
-| `config_page` | 配置页 | 含"配置/设置/参数设置"等关键词 |
-| `mobile_page` | 移动端页面 | 含"移动端/手机端/h5/viewport"等关键词 |
-| `flow_diagram` | 流程图 / 拓扑图 | 含"流程图/拓扑/节点/连线"等关键词，或 图片控件为主且无输入框 |
-| `login_page` | 登录 / 注册 / 验证码页 | 含"登录/注册/验证码/找回密码"等关键词 |
-| `list_page` | 列表页 | 含表格控件但无下拉筛选 |
-| `detail_page` | 详情页 | 标题 + 字段键值对 |
-| `form_page` | 表单页 | 含输入框控件且无表格 |
-| `modal_dialog` | 弹窗 / 对话框 | — |
-| `dashboard` | 仪表盘 / 数据看板 | 含"仪表盘/看板/大盘/首页/overview"等关键词 |
-| `image_composite` | 截图拼接页 | 由多张截图拼出来（见下方截图拼接识别） |
-| `unknown` | 无法判定 | — |
+| 标签                | 含义             | 识别依据                                 |
+| ----------------- | -------------- | ------------------------------------ |
+| `admin_console`   | 管理后台页面         | 含"管理后台/后台管理/控制台"等关键词，或 表格+下拉+按钮 控件组合 |
+| `config_page`     | 配置页            | 含"配置/设置/参数设置"等关键词                    |
+| `mobile_page`     | 移动端页面          | 含"移动端/手机端/h5/viewport"等关键词           |
+| `flow_diagram`    | 流程图 / 拓扑图      | 含"流程图/拓扑/节点/连线"等关键词，或 图片控件为主且无输入框    |
+| `login_page`      | 登录 / 注册 / 验证码页 | 含"登录/注册/验证码/找回密码"等关键词                |
+| `list_page`       | 列表页            | 含表格控件但无下拉筛选                          |
+| `detail_page`     | 详情页            | 标题 + 字段键值对                           |
+| `form_page`       | 表单页            | 含输入框控件且无表格                           |
+| `modal_dialog`    | 弹窗 / 对话框       | —                                    |
+| `dashboard`       | 仪表盘 / 数据看板     | 含"仪表盘/看板/大盘/首页/overview"等关键词         |
+| `image_composite` | 截图拼接页          | 由多张截图拼出来（见下方截图拼接识别）                  |
+| `unknown`         | 无法判定           | —                                    |
 
 **截图拼接识别（is_screenshot_composite）：**
 
@@ -221,14 +223,15 @@ python3 scripts/parse_axure.py <原型目录> --list-pages
 向用户提供选择语法后**暂停等待用户回复**：
 
 > 我已解析该原型，共识别到 **18** 个页面。请选择要生成交付物的页面范围：
->
+> 
 > 选择语法（逗号分隔，可混合）：
+> 
 > - `all` — 全部页面
 > - `1,3,5` — 按序号多选（1-based）
 > - `2-6` — 按序号范围（闭区间）
 > - `概述,业务.html` — 按页面名（带不带 `.html` 均可）
 > - `1,3-5,概述` — 混合
->
+> 
 > 直接回复即可，例如：`1,3-7` 或 `all`。
 
 #### 3.3 按选择重新解析（过滤）
@@ -242,13 +245,13 @@ python3 scripts/parse_axure.py <原型目录> --pages "1,3-7" --json > prototype
 
 脚本支持的 `--pages` 语法与 3.2 展示给用户的完全一致：
 
-| 语法              | 含义                              |
-| --------------- | ------------------------------- |
-| `all`           | 全部页面                            |
-| `1,3,5`         | 按序号多选（1-based，即清单里显示的编号）        |
-| `2-6`           | 按序号范围（闭区间）                     |
-| `概述` / `业务.html` | 按页面名精确匹配（带不带 `.html` 后缀均可）      |
-| `1,3-5,概述`      | 混合                              |
+| 语法               | 含义                         |
+| ---------------- | -------------------------- |
+| `all`            | 全部页面                       |
+| `1,3,5`          | 按序号多选（1-based，即清单里显示的编号）   |
+| `2-6`            | 按序号范围（闭区间）                 |
+| `概述` / `业务.html` | 按页面名精确匹配（带不带 `.html` 后缀均可） |
+| `1,3-5,概述`       | 混合                         |
 
 过滤后 JSON 的 `pages` 数组只保留选中页面，`total_pages` / `selected_page_count` / `selected_indices` 字段同步更新；`page_tree` 保留完整层级结构供交付物引用父子关系。**后续步骤（询问交付物、生成交付物）都基于这份过滤后的 JSON 执行。**
 
@@ -270,7 +273,7 @@ python3 scripts/parse_axure.py <原型目录> --pages "1,3-7" --json > prototype
 > 主要页面内容摘要：...
 > 
 > 请选择要生成的交付物（可多选）：
->
+> 
 > 1. 📄 **PRD（产品需求文档）** - Markdown，7 章节（文档信息/产品概述/页面结构/功能需求/非功能需求/页面流程图/附录）
 > 2. 📋 **功能清单** - xlsx，8 列（功能编号/模块/功能名称/功能描述/优先级/所属页面/关联功能/备注），按页面分组
 > 3. 🧪 **测试用例** - xlsx，8 列（用例编号/模块/功能点/用例标题/前置条件/测试步骤/预期结果/优先级），按模块分组
@@ -296,23 +299,25 @@ python3 scripts/parse_axure.py <原型目录> --pages "1,3-7" --json > prototype
 
 根据用户选择，生成对应的交付物。**每种交付物有独立的格式规范文件**（位于 `references/`，给模型读取的列定义/便签纳入规则）**+ 独立生成脚本**（位于 `scripts/`，可执行生成真正可打开的 xlsx/md）：
 
-| 交付物        | 格式   | reference 规范               | 生成脚本                          | 何时读取        |
-| ---------- | ---- | -------------------------- | ----------------------------- | ----------- |
-| 📄 PRD     | md   | `references/PRD-template.md` | （inline，无独立脚本）                | 用户要生成 PRD 时    |
-| 📋 功能清单    | xlsx | `references/功能清单.md`       | `scripts/generate_feature_list.py` | 用户要生成功能清单时  |
-| 🧪 测试用例    | xlsx | `references/测试用例.md`       | `scripts/generate_test_cases.py`   | 用户要生成测试用例时  |
-| 📊 数据字典    | md   | `references/数据字典.md`        | `scripts/generate_data_dict.py`    | 用户要生成数据字典时  |
-| 📅 开发计划    | md   | `references/开发计划.md`        | `scripts/generate_dev_plan.py`     | 用户要生成开发计划时  |
-| 🔗 页面跳转关系图 | md   | `references/页面跳转关系图.md`     | `scripts/generate_page_flow.py`    | 用户要生成跳转关系图时 |
-| 🎯 用户故事    | md   | `references/用户故事.md`        | `scripts/generate_user_stories.py` | 用户要生成用户故事时  |
+| 交付物        | 格式   | reference 规范                 | 生成脚本                               | 何时读取        |
+| ---------- | ---- | ---------------------------- | ---------------------------------- | ----------- |
+| 📄 PRD     | md   | `references/PRD-template.md` | （inline，无独立脚本）                     | 用户要生成 PRD 时 |
+| 📋 功能清单    | xlsx | `references/功能清单.md`         | `scripts/generate_feature_list.py` | 用户要生成功能清单时  |
+| 🧪 测试用例    | xlsx | `references/测试用例.md`         | `scripts/generate_test_cases.py`   | 用户要生成测试用例时  |
+| 📊 数据字典    | md   | `references/数据字典.md`         | `scripts/generate_data_dict.py`    | 用户要生成数据字典时  |
+| 📅 开发计划    | md   | `references/开发计划.md`         | `scripts/generate_dev_plan.py`     | 用户要生成开发计划时  |
+| 🔗 页面跳转关系图 | md   | `references/页面跳转关系图.md`      | `scripts/generate_page_flow.py`    | 用户要生成跳转关系图时 |
+| 🎯 用户故事    | md   | `references/用户故事.md`         | `scripts/generate_user_stories.py` | 用户要生成用户故事时  |
 
 **工作分工**：
+
 - **`references/` 规范文档**（.md）— 给**模型**读取：列定义、工作表/文档结构、便签纳入规则、优先级评定、使用要点。决定"生成什么样子"
 - **`scripts/` 生成脚本**（.py）— 给**机器**执行：可独立跑，按规范产出真正可打开的 `.xlsx`（openpyxl 生 Excel 二进制）/ `.md`。决定"怎么生成"
 
 **为什么不把代码塞进 reference**：skill 规范里 references/ 放给模型读的文档、scripts/ 放可执行代码——职责分离便于独立调试、复用、升级。reference 只描述"应该生成什么"，脚本负责"真正生成出来"。
 
 **典型生成流程**（以功能清单为例）：
+
 ```bash
 # 1. 先用 parse_axure.py 拿到解析 JSON
 python3 scripts/parse_axure.py <原型目录> --json > prototype.json
@@ -376,14 +381,15 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 生成交付物后，**主动询问**用户是否需要调用 `requirement-analysis` skill 进行需求澄清和分析：
 
 > 📦 交付物已生成至 `output/` 目录。
->
+> 
 > 原型解析生成的 PRD/功能清单基于原型可见内容推断，可能存在：
+> 
 > - 🔴 模糊描述（如"管理用户信息"无具体操作）
 > - 🟡 边界不明（如"导出数据"未说明格式/范围）
 > - 🟢 缺失上下文（如审批流程未定义审批角色）
->
+> 
 > 是否调用 `requirement-analysis` skill 进行需求澄清与分析？
->
+> 
 > - **A. ✅ 调用** — 启动 `requirement-analysis` skill，对已生成的 PRD/功能清单进行需求澄清、冲突检测、INVEST 质量评估
 > - **B. ⏭️ 跳过** — 当前交付物已满足需求，流程结束
 
@@ -497,13 +503,13 @@ use_skill:
 
 ### 各工具解析深度对比
 
-| 工具 | 数据源 | 页面树 | 文本 | 控件类型 | 交互事件 | 便签/备注 |
-|------|--------|--------|------|---------|---------|----------|
-| Axure | `document.js` + HTML + `data.js` | ✓ 树形 | ✓ span | ✓ friendlyType | ✓ onClick | ✓ `_ann` div + 矩形备注 |
-| 墨刀 | HTML + `index.html` 链接 | ✗ 扁平 | ✓ span | ✓ 注释 | ✗ | ✓ 矩形备注 |
-| MasterGo | `PAGED_FRAMES` JS | ✗ 画板列表 | ✗ | ✗ | ✗ | ✗ |
-| 蓝湖 | `.schema.json` 图层树 | ✗ 每画板独立 | ✓ lanhutext | ✓ 图层类型 | ✗ | ✗ |
-| 未知 | HTML 扫描 | ✗ 扁平 | ✓ span | ✓ 注释 | ✗ | ✓ 矩形备注 |
+| 工具       | 数据源                              | 页面树     | 文本          | 控件类型           | 交互事件      | 便签/备注               |
+| -------- | -------------------------------- | ------- | ----------- | -------------- | --------- | ------------------- |
+| Axure    | `document.js` + HTML + `data.js` | ✓ 树形    | ✓ span      | ✓ friendlyType | ✓ onClick | ✓ `_ann` div + 矩形备注 |
+| 墨刀       | HTML + `index.html` 链接           | ✗ 扁平    | ✓ span      | ✓ 注释           | ✗         | ✓ 矩形备注              |
+| MasterGo | `PAGED_FRAMES` JS                | ✗ 画板列表  | ✗           | ✗              | ✗         | ✗                   |
+| 蓝湖       | `.schema.json` 图层树               | ✗ 每画板独立 | ✓ lanhutext | ✓ 图层类型         | ✗         | ✗                   |
+| 未知       | HTML 扫描                          | ✗ 扁平    | ✓ span      | ✓ 注释           | ✗         | ✓ 矩形备注              |
 
 **Axure 数据键**：`document.js` 用 `"pageName"`/`"url"`/`"children"` 标识页面层级；每页 `data.js` 用 `friendlyType`/`label`/`interactionMap`/`style` 描述控件；HTML 中 `<span>` 装载可见文本、`<!-- Unnamed (类型) -->` 标识控件、`table_cell` 类标识表格、`<img>` 引用 `images/`。
 
