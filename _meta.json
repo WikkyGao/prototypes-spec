@@ -1,7 +1,7 @@
 {
   "name": "prototypes-spec",
   "display_name": "原型→开发交付物生成器",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划等开发交付物。",
   "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, and development plans.",
   "author": {
@@ -55,6 +55,22 @@
     "通用 HTML 解析兜底"
   ],
   "changelog": [
+    {
+      "version": "1.1.0",
+      "date": "2026-07-30",
+      "changes": [
+        "P0: 修复 --json 输出非 JSON 的 bug（argparse 重构）",
+        "P0: --pages 新增 url/文件名匹配支持",
+        "P0: 修复 generate_json_summary KeyError 和类型比较恒为 False",
+        "P0: 新增磁盘 fallback，发现 document.js 未注册的 HTML 文件",
+        "P1: 新增表格列头提取 extract_table_columns_from_html()",
+        "P1: 新增全局菜单噪声过滤 build_menu_noise_set() + cleaned_texts",
+        "P1: 新增 _is_data_value() 区分字段标签与数据值",
+        "P1: parse_page_selection 支持多模块页面重复选择",
+        "P2: 新增品牌过滤机制 brand_filter.json + apply_brand_filter()",
+        "P2: format_page_list 新增 --list-pages-group 按前缀分组展示"
+      ]
+    },
     {
       "version": "1.0.0",
       "date": "2026-07-27",
