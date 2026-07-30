@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "patterns": [],
+  "replacement": "(示例)",
+  "description": "品牌词汇替换表，交付物中不得出现这些字眼。将需要过滤的品牌词汇添加到 patterns 数组中，例如：[\"PICC\", \"中国人民保险\", \"人保\"]"
+}

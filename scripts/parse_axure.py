@@ -8,6 +8,9 @@ import json
 import os
 import re
 import sys
+import argparse
+import glob as _glob
+from collections import Counter, defaultdict
 from html.parser import HTMLParser
 
 
@@ -301,6 +304,39 @@ def classify_page(page):
 
 
 # ---------------------------------------------------------------------------
+# 全局菜单壳噪声过滤
+# ---------------------------------------------------------------------------
+
+def build_menu_noise_set(pages):
+    """
+    从页面 texts 中提取全局菜单噪声集。
+
+    策略：找出现次数最多的前 150 条文本，对大多数页面 (>80%) 都出现的文本即为菜单噪声。
+    Axure 导出后每个页面 HTML 的开头 ~135 条 <span> 是全局菜单文本（完全相同），
+    导致 page['texts'] 被大量噪声污染。
+
+    返回: set[str] 噪声文本集合
+    """
+    text_counter = Counter()
+    for page in pages:
+        # 取每个页面前 200 条去重文本（菜单壳在前）
+        unique = []
+        for t in page.get('texts', []):
+            if t not in unique:
+                unique.append(t)
+                if len(unique) >= 200:
+                    break
+        text_counter.update(unique)
+
+    total = len(pages)
+    if total == 0:
+        return set()
+    threshold = int(total * 0.8)
+    noise = {t for t, c in text_counter.items() if c >= threshold and len(t) >= 1}
+    return noise
+
+
+# ---------------------------------------------------------------------------
 # 截图拼接识别
 # ---------------------------------------------------------------------------
 
@@ -493,6 +529,35 @@ def detect_filter_area(parser, texts, widgets):
 # 字段说明严格基于页面出现内容（禁止臆想）
 # ---------------------------------------------------------------------------
 
+def _is_data_value(text, page_texts):
+    """
+    判断一个文本片段是数据值而非字段标签。
+
+    特征：含数字/IP/人名特征、在页面重复出现、无冒号结尾。
+    """
+    # 以 ： 或 : 结尾 → 字段标签，非数据值
+    if text.endswith('：') or text.endswith(':'):
+        return False
+    # 含 IP 地址
+    if re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', text):
+        return True
+    # 纯数字（含端口、数量、百分比）
+    if re.match(r'^[\d.,]+[%％]?$', text.strip()):
+        return True
+    # 含 UUID 或哈希
+    if re.match(r'^[a-f0-9]{8}-[a-f0-9]{4}-', text):
+        return True
+    # 中文人名特征：2-3个中文字 + 在页面重复 ≥2 次
+    if re.match(r'^[一-龥]{2,3}$', text):
+        count = page_texts.count(text)
+        if count >= 2:
+            return True
+    # 含常见数据值后缀（元、个、台、次、项等数量单位）且以数字开头
+    if re.match(r'^\d+[元个台次项人件条张颗只块]', text):
+        return True
+    return False
+
+
 def extract_page_fields_strict(texts, widgets, page_name=''):
     """
     严格基于页面可见内容提取字段说明，禁止凭空臆想。
@@ -528,6 +593,9 @@ def extract_page_fields_strict(texts, widgets, page_name=''):
     seen_labels = set()
 
     for idx, t in enumerate(texts):
+        # 跳过数据值（IP地址、纯数字、人名等）
+        if _is_data_value(t, texts):
+            continue
         # 字段标签特征：以":"或"："结尾，或匹配常见字段后缀
         ends_with_colon = t.endswith('：') or t.endswith(':')
         matches_hint = any(hint in t for hint in _FILTER_FIELD_HINTS)
@@ -585,6 +653,60 @@ def extract_page_fields_strict(texts, widgets, page_name=''):
         'fields': fields,
         'ambiguous_fields': ambiguous_fields,
     }
+
+
+# ---------------------------------------------------------------------------
+# 表格列头提取（Axure 中继器表格）
+# ---------------------------------------------------------------------------
+
+def extract_table_columns_from_html(html_content):
+    """
+    从 Axure HTML 中提取表格列头。
+    策略：找 y 坐标在 5~30 范围内、元素数量最多的几行，按 x 坐标排序去重。
+    返回: [(column_name, x_position), ...]
+    """
+    divs = re.findall(
+        r'<div[^>]*data-left="(\d+)"[^>]*data-top="(\d+)"[^>]*>.*?<span[^>]*>([^<]+)</span>',
+        html_content, re.DOTALL
+    )
+
+    y_groups = defaultdict(list)
+    for x, y, text in [(int(d[0]), int(d[1]), d[2].strip()) for d in divs]:
+        if text and len(text) >= 2 and 5 <= y <= 30:
+            y_groups[y].append((int(x), text))
+
+    # 取元素 ≥4 且 y≤20 的行作为候选表头行
+    candidate_rows = []
+    for y, items in y_groups.items():
+        if len(items) >= 4 and y <= 20:
+            items.sort(key=lambda i: i[0])
+            candidate_rows.append((y, len(items), items))
+
+    if not candidate_rows:
+        return []
+
+    # 取元素最多的行作为主表头行，与其相邻 y (±3) 的行做补全
+    candidate_rows.sort(key=lambda r: r[1], reverse=True)
+    main_y = candidate_rows[0][0]
+
+    all_columns = {}  # {x_pos: column_name}
+    for y, _, items in candidate_rows:
+        if abs(y - main_y) <= 3:  # 临近行纳入
+            for x, text in items:
+                if x not in all_columns:
+                    all_columns[x] = text
+
+    result = [(text, x) for x, text in sorted(all_columns.items(), key=lambda i: i[0])]
+
+    # 去重（相同文本只保留最小的 x 坐标）
+    seen = set()
+    dedup = []
+    for text, x in result:
+        if text not in seen:
+            seen.add(text)
+            dedup.append((text, x))
+
+    return dedup
 
 
 def _parse_rootnodes_stream(filepath):
@@ -763,6 +885,7 @@ def parse_page_html(filepath):
             'strict_fields': [], 'ambiguous_fields': [],
             'filter_area': {'has_filter': False,
                              'filter_fields': [], 'filter_actions': []},
+            'table_columns': [],
         }
 
     parser = AxurePageHTMLParser()
@@ -780,6 +903,9 @@ def parse_page_html(filepath):
     # 筛选区域识别
     filter_area = detect_filter_area(parser, texts, widgets)
 
+    # 表格列头提取
+    table_columns = extract_table_columns_from_html(html_content)
+
     return {
         'title': parser.title,
         'texts': texts,
@@ -790,6 +916,7 @@ def parse_page_html(filepath):
         'strict_fields': strict['fields'],
         'ambiguous_fields': strict['ambiguous_fields'],
         'filter_area': filter_area,
+        'table_columns': table_columns,
     }
 
 
@@ -1276,6 +1403,7 @@ def _parse_axure_full(directory_path):
                 'filter_fields': [],
                 'filter_actions': [],
             },
+            'table_columns': [],
         }
 
         # 解析 HTML
@@ -1289,6 +1417,7 @@ def _parse_axure_full(directory_path):
             page_info['strict_fields'] = html_data.get('strict_fields', [])
             page_info['ambiguous_fields'] = html_data.get('ambiguous_fields', [])
             page_info['filter_area'] = html_data.get('filter_area', page_info['filter_area'])
+            page_info['table_columns'] = html_data.get('table_columns', [])
 
         # 解析 data.js
         if os.path.exists(data_js_path):
@@ -1298,6 +1427,49 @@ def _parse_axure_full(directory_path):
 
         page_info['page_category'] = classify_page(page_info)
         result['pages'].append(page_info)
+
+    # ===== 磁盘 fallback：发现磁盘上有但 document.js 中未注册的 HTML 文件 =====
+    disk_html_files = set(os.path.basename(f) for f in _glob.glob(os.path.join(directory_path, '*.html')))
+    doc_html_files = set(p['url'] for p in flat_pages)
+    # 排除 Axure 框架文件
+    framework_exclude = {'index.html', 'start.html', 'start_c_1.html', 'start_with_pages.html'}
+    missing_files = disk_html_files - doc_html_files - framework_exclude
+
+    for html_file in sorted(missing_files):
+        html_path = os.path.join(directory_path, html_file)
+        html_data = parse_page_html(html_path)
+        # 推断 pageName：优先用 <title> 标签内容，否则用文件名
+        page_name = html_data.get('title', '') or html_file.replace('.html', '')
+        page_info = {
+            'pageName': page_name,
+            'url': html_file,
+            'texts': html_data['texts'],
+            'widgets': [],
+            'notes': html_data.get('notes', []),
+            'interactions': [],
+            'has_html': True,
+            'has_data_js': False,  # 磁盘文件通常无 data.js
+            'is_screenshot_composite': html_data.get('is_screenshot_composite', False),
+            'screenshot_evidence': html_data.get('screenshot_evidence', ''),
+            'strict_fields': html_data.get('strict_fields', []),
+            'ambiguous_fields': html_data.get('ambiguous_fields', []),
+            'filter_area': html_data.get('filter_area', {
+                'has_filter': False, 'filter_fields': [], 'filter_actions': [],
+            }),
+            'table_columns': html_data.get('table_columns', []),
+        }
+        page_info['page_category'] = classify_page(page_info)
+        result['pages'].append(page_info)
+        print(f"⚠️ 磁盘发现未注册页面，已纳入解析: {html_file}", file=sys.stderr)
+
+    result['total_pages'] = len(result['pages'])
+
+    # 去全局菜单噪声
+    menu_noise = build_menu_noise_set(result['pages'])
+    for page in result['pages']:
+        page['menu_noise_count'] = len(menu_noise)  # 备查
+        # 不直接删除 texts，而是新增 cleaned_texts 字段
+        page['cleaned_texts'] = [t for t in page.get('texts', []) if t not in menu_noise]
 
     return result
 
@@ -1446,13 +1618,16 @@ def format_parse_result(result):
 def generate_json_summary(result):
     """生成 JSON 摘要（用于程序化处理）。"""
     summary = {
-        'type': result['type'],
+        'type': result.get('type', 'unknown'),
         'project_name': result.get('project_name', ''),
         'total_pages': result.get('total_pages', 0),
         'pages': []
     }
-    
-    if result['type'] == 'directory':
+
+    # 所有目录类型（axure/mockplus/mastergo/lanhu/loose/plain）均纳入 page_tree
+    result_type = result.get('type', '')
+    if result_type in ('axure_directory', 'mockplus_directory', 'mastergo_directory',
+                       'lanhu_directory', 'loose_directory', 'directory'):
         summary['page_tree'] = result.get('page_tree', [])
     
     for page in result.get('pages', []):
@@ -1475,27 +1650,30 @@ def generate_json_summary(result):
 def parse_page_selection(spec, pages):
     """
     解析用户输入的页面选择字符串，返回选中的页面索引列表（0-based）。
-    
+
     支持的语法（逗号分隔，可混合）：
       - `all`：选中全部页面
-      - 页面名（精确匹配 pageName，含 .html 后缀也可）
+      - 页面名（精确匹配 pageName 或 url/文件名，含 .html 后缀也可）
       - 数字索引（1-based，即用户看到的序号）
       - 范围 `N-M`（1-based 闭区间）
-    
+
+    注意：同一页面若被多个 token 匹配，索引可以重复出现，
+    以支持页面属于多个模块的场景（多对多关系）。
+
     参数:
         spec: 用户输入字符串，如 "1,3-5,概述"
         pages: 解析结果中的 pages 列表（每个 dict 含 pageName）
-    
+
     返回:
         (selected_indices, errors)
-        selected_indices: 去重排序后的 0-based 索引列表
+        selected_indices: 排序后的 0-based 索引列表（可能含重复项）
         errors: 无法识别的 token 列表
     """
     if not spec or not spec.strip():
         return list(range(len(pages))), []
 
     tokens = [t.strip() for t in spec.split(',') if t.strip()]
-    selected = set()
+    selected = []  # 使用列表而非集合，允许重复
     errors = []
     total = len(pages)
 
@@ -1513,27 +1691,40 @@ def parse_page_selection(spec, pages):
                 continue
             lo, hi = min(start, end), max(start, end)
             for idx in range(lo - 1, hi):
-                selected.add(idx)
+                selected.append(idx)
             continue
 
         # 单个数字索引（1-based）
         if re.match(r'^\d+$', tok):
             idx = int(tok) - 1
             if 0 <= idx < total:
-                selected.add(idx)
+                selected.append(idx)
             else:
                 errors.append(tok)
             continue
 
-        # 页面名匹配（支持带或不带 .html 后缀）
+        # 页面名匹配（支持带或不带 .html 后缀，优先匹配 pageName，其次 url/文件名）
         normalized_tok = tok[:-5] if tok.endswith('.html') else tok
         matched = False
+
+        # 第一优先级：pageName 精确匹配
         for i, page in enumerate(pages):
             pname = page.get('pageName', '')
             if pname == tok or pname == normalized_tok:
-                selected.add(i)
+                selected.append(i)
                 matched = True
                 break
+
+        # 第二优先级：url/文件名匹配
+        if not matched:
+            for i, page in enumerate(pages):
+                purl = page.get('url', '')
+                url_no_ext = purl[:-5] if purl.endswith('.html') else purl
+                if purl == tok or url_no_ext == tok or purl == tok + '.html' or url_no_ext == normalized_tok:
+                    selected.append(i)
+                    matched = True
+                    break
+
         if not matched:
             errors.append(tok)
 
@@ -1559,27 +1750,51 @@ def filter_result_by_pages(result, selected_indices):
     return new_result
 
 
-def format_page_list(result):
-    """格式化页面清单（带序号）供用户选择。"""
+def format_page_list(result, group_by=None):
+    """格式化页面清单（带序号）供用户选择。
+    当 group_by='prefix' 时，按文件名共同前缀分组展示。"""
     lines = []
     lines.append(f"📁 项目: {result.get('project_name', '')}")
     total = result.get('total_pages', 0)
     lines.append(f"📄 识别到的页面总数: {total}")
     lines.append("")
-    lines.append("可选择的页面清单（序号为选择时使用的编号）：")
 
     pages = result.get('pages', [])
-    for i, page in enumerate(pages, start=1):
-        pname = page.get('pageName', '(未命名)')
-        url = page.get('url', '')
-        text_count = len(page.get('texts', []))
-        widget_count = len(page.get('widgets', []))
-        interaction_count = len(page.get('interactions', []))
-        lines.append(
-            f"  {i:>3}. {pname}"
-            f"  [文本×{text_count}, 控件×{widget_count}, 交互×{interaction_count}]"
-            f"  {url}"
-        )
+
+    if group_by == 'prefix':
+        # 按文件名前缀分组（取第一个 _ 或 - 或 （ 之前的部分）
+        groups = defaultdict(list)
+        for i, page in enumerate(pages, start=1):
+            url = page.get('url', '')
+            prefix = re.split(r'[-_（(]', url)[0]
+            groups[prefix].append((i, page))
+
+        for prefix, items in sorted(groups.items()):
+            lines.append(f"\n📁 {prefix} ({len(items)} 页)")
+            for idx, page in items:
+                pname = page.get('pageName', '(未命名)')
+                url = page.get('url', '')
+                text_count = len(page.get('texts', []))
+                widget_count = len(page.get('widgets', []))
+                interaction_count = len(page.get('interactions', []))
+                lines.append(
+                    f"    {idx:>4}. {pname}"
+                    f"  [文本×{text_count}, 控件×{widget_count}, 交互×{interaction_count}]"
+                    f"  {url}"
+                )
+    else:
+        lines.append("可选择的页面清单（序号为选择时使用的编号）：")
+        for i, page in enumerate(pages, start=1):
+            pname = page.get('pageName', '(未命名)')
+            url = page.get('url', '')
+            text_count = len(page.get('texts', []))
+            widget_count = len(page.get('widgets', []))
+            interaction_count = len(page.get('interactions', []))
+            lines.append(
+                f"  {i:>3}. {pname}"
+                f"  [文本×{text_count}, 控件×{widget_count}, 交互×{interaction_count}]"
+                f"  {url}"
+            )
 
     lines.append("")
     lines.append("选择语法示例：")
@@ -1591,35 +1806,57 @@ def format_page_list(result):
     return "\n".join(lines)
 
 
-def _get_arg_value(argv, flag):
-    """从 argv 中取出 --flag value；不存在返回 None。"""
-    if flag in argv:
-        idx = argv.index(flag)
-        if idx + 1 < len(argv):
-            return argv[idx + 1]
-    return None
+# ---------------------------------------------------------------------------
+# 品牌词汇过滤
+# ---------------------------------------------------------------------------
+
+# brand_filter.json 的加载路径（相对于脚本所在目录）
+_BRAND_FILTER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   '..', 'references', 'brand_filter.json')
+
+
+def load_brand_filter():
+    """加载品牌过滤配置。"""
+    try:
+        with open(_BRAND_FILTER_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        return {'enabled': False, 'patterns': [], 'replacement': '(示例)',
+                'description': ''}
+
+
+def apply_brand_filter(text, filters=None):
+    """对输出文本中的品牌词汇做替换。"""
+    if filters is None:
+        filters = load_brand_filter()
+    if not filters or not filters.get('enabled'):
+        return text
+    replacement = filters.get('replacement', '(示例)')
+    for pattern in filters.get('patterns', []):
+        text = text.replace(pattern, replacement)
+    return text
 
 
 def main():
     """命令行入口：解析原型并输出摘要，支持页面选择过滤。"""
-    if len(sys.argv) < 2:
-        print("用法: python parse_axure.py <原型目录或HTML文件> [选项]")
-        print("选项：")
-        print("  --json             输出完整 JSON（含所有文本/控件/交互）")
-        print("  --json-summary     输出 JSON 摘要（推荐，便于程序化处理）")
-        print("  --list-pages       仅列出页面清单（带序号），供用户选择")
-        print("  --pages <spec>     按选择过滤页面，spec 支持：")
-        print("                       all                      全部页面")
-        print("                       1,3,5                   按序号多选（1-based）")
-        print("                       2-6                     按序号范围（闭区间）")
-        print("                       概述,业务.html           按页面名（带不带 .html 均可）")
-        print("                       1,3-5,概述              混合")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='解析 Axure/墨刀/MasterGo/蓝湖原型文件')
+    parser.add_argument('path', help='原型目录或HTML文件路径')
+    parser.add_argument('--json', action='store_true', help='输出完整 JSON（含所有文本/控件/交互）')
+    parser.add_argument('--json-summary', action='store_true', help='输出 JSON 摘要（推荐，便于程序化处理）')
+    parser.add_argument('--list-pages', action='store_true', help='仅列出页面清单（带序号），供用户选择')
+    parser.add_argument('--list-pages-group', action='store_true', help='按文件名前缀分组的页面清单')
+    parser.add_argument('--pages', type=str, help='按选择过滤页面，如 1,3-5,概述')
+    args = parser.parse_args()
 
-    path = sys.argv[1]
-    output_mode = '--json' if '--json' in sys.argv else '--json-summary' if '--json-summary' in sys.argv else 'text'
-    list_pages = '--list-pages' in sys.argv
-    pages_spec = _get_arg_value(sys.argv, '--pages')
+    path = args.path
+    if args.json:
+        output_mode = 'json'
+    elif args.json_summary:
+        output_mode = 'json-summary'
+    else:
+        output_mode = 'text'
+    list_pages = args.list_pages or args.list_pages_group
+    pages_spec = args.pages
 
     if not os.path.exists(path):
         print(f"错误: 路径不存在: {path}")
@@ -1642,13 +1879,18 @@ def main():
             result = filter_result_by_pages(result, selected)
 
     if list_pages:
-        print(format_page_list(result))
+        group_by = 'prefix' if args.list_pages_group else None
+        print(format_page_list(result, group_by=group_by))
         return
 
     if output_mode == 'json':
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif output_mode == 'json-summary':
-        print(json.dumps(generate_json_summary(result), ensure_ascii=False, indent=2))
+        try:
+            print(json.dumps(generate_json_summary(result), ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f'{{"error": "generate_json_summary failed: {e}"}}', file=sys.stderr)
+            print(json.dumps(result, ensure_ascii=False, indent=2))  # fallback to full json
     else:
         print(format_parse_result(result))
 
