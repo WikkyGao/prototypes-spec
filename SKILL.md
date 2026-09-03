@@ -128,7 +128,7 @@ python3 scripts/parse_axure.py <页面.html>
 | `screenshot_evidence`     | string | 截图拼接判定的证据描述                                                    |
 | `strict_fields`           | list   | 严格基于页面出现内容提取的字段说明（禁止臆想）                                        |
 | `ambiguous_fields`        | list   | 模糊字段（标签后无控件/类型无法推断），需先与用户确认再写入 PRD/数据字典                        |
-| `filter_area`             | dict   | 筛选区域识别（管理后台常见），含 `has_filter`/`filter_fields`/`filter_actions` |
+| `filter_area`             | dict   | 筛选区域识别（管理后台常见），含 `has_filter`/`filter_fields`/`filter_actions`/`verified`（字段是否经 styles.css 坐标核实） |
 | `cleaned_texts`           | list   | `texts` 剔除全局菜单噪声（各页重复出现的导航/菜单壳文本）后的去噪子集；生成交付物优先以 `cleaned_texts` 为文本来源，`texts` 保留全量供回溯 |
 
 **页面分类标签（page_category）：**

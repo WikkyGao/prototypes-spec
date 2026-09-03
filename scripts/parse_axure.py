@@ -25,6 +25,16 @@ class AxurePageHTMLParser(HTMLParser):
         self.title = ""
         self.in_title = False
         self.widget_comments = []  # [{name, type}]
+        # 文本坐标辅助：span 文本与其所在 Axure 控件 div id（uNNN）的对应关系，
+        # 供筛选区域坐标核实使用（坐标本体在 files/<页面>/styles.css）
+        self.text_positions = []      # [(text, widget_id, in_tree_group)]
+        self._current_widget_id = None
+        # 输入类控件 id（input/select 所在的 Axure 控件），供筛选字段语义核实
+        self.input_widget_ids = set()
+        # Axure 树容器（selectiongroup 含 _tree_group）内的文本需排除，
+        # 其节点名常与筛选标签在绝对定位下空间重叠
+        self._div_stack = []          # 每个 div 是否为 tree_group 容器
+        self._tree_group_depth = 0
         # 便签/备注说明相关
         self.notes = []           # 便签/备注文本列表（Axure 中以 _ann 后缀标识）
         self.current_note = []    # 当前便签文本缓冲
@@ -57,6 +67,13 @@ class AxurePageHTMLParser(HTMLParser):
             self._track_image(attrs_dict)
             return
 
+        # 输入类控件：id 形如 u451_input / u9_select，剥后缀得控件 id
+        if tag in ('input', 'select'):
+            m = re.match(r'(u\d+)_(?:input|select)$', element_id)
+            if m:
+                self.input_widget_ids.add(m.group(1))
+            return
+
         # 截图拼接识别：background-image 切片
         bg_match = re.search(r'background(?:-image)?\s*:\s*url\(([^)]+)\)',
                              style, re.IGNORECASE)
@@ -77,6 +94,15 @@ class AxurePageHTMLParser(HTMLParser):
                 self.in_rect_note_span = True
                 self.current_rect_note = []
         elif tag == 'div':
+            # Axure 树容器标记（<div selectiongroup="u173_tree_group">），
+            # 用栈精确配对开闭，跟踪文本是否处于树容器内
+            is_tree_group = '_tree_group' in str(attrs_dict.get('selectiongroup', ''))
+            self._div_stack.append(is_tree_group)
+            if is_tree_group:
+                self._tree_group_depth += 1
+            # Axure 控件 div id 形如 u452 / u452_text，跟踪最近的控件 id
+            if re.match(r'^u\d+(_text)?$', element_id):
+                self._current_widget_id = element_id
             # 便签 div：id 以 _ann 结尾
             if element_id.endswith('_ann'):
                 self.in_note = True
@@ -108,6 +134,11 @@ class AxurePageHTMLParser(HTMLParser):
             text = ''.join(self.current_text).strip()
             if text:
                 self.texts.append(text)
+                widget_id = self._current_widget_id or ''
+                if widget_id.endswith('_text'):
+                    widget_id = widget_id[:-len('_text')]
+                self.text_positions.append(
+                    (text, widget_id, self._tree_group_depth > 0))
                 # 矩形备注识别：文本以"备注"开头（含全角冒号变体）视为矩形内备注说明
                 if re.match(r'^备注[:：]?\s*', text):
                     self.rectangle_notes.append(text)
@@ -132,6 +163,9 @@ class AxurePageHTMLParser(HTMLParser):
                 self.in_rect_note_span = False
                 self.current_rect_note = []
         elif tag == 'div':
+            if self._div_stack:
+                if self._div_stack.pop() and self._tree_group_depth > 0:
+                    self._tree_group_depth -= 1
             if self.in_note:
                 # 便签 div 结束时归并文本
                 # 通过 attrs 无法在 endtag 拿到 id，用缓冲法：便签内所有 span 文本合并
@@ -440,20 +474,61 @@ _FILTER_FIELD_HINTS = [
 ]
 
 
-def detect_filter_area(parser, texts, widgets):
+def parse_page_css_positions(styles_css_path):
+    """解析 files/<页面>/styles.css，返回 {控件id: {x, y, width, height}}。
+
+    Axure 每个控件的绝对定位写在页面级 CSS 里，形如：
+        #u452 { position:absolute; left:1186px; top:69px; width:53px; height:28px; }
+    只取纯 uNNN id（跳过 #u452_img / #u452_text 等变体）。
+    """
+    try:
+        with open(styles_css_path, 'r', encoding='utf-8', errors='ignore') as f:
+            css = f.read()
+    except (FileNotFoundError, IOError):
+        return {}
+
+    positions = {}
+    for m in re.finditer(r'#(u\d+)\s*\{([^}]*)\}', css):
+        uid, body = m.group(1), m.group(2)
+        if uid in positions:
+            continue
+
+        def _px(prop):
+            pm = re.search(prop + r'\s*:\s*(-?\d+(?:\.\d+)?)px', body)
+            return float(pm.group(1)) if pm else None
+
+        x, y = _px('left'), _px('top')
+        if x is None or y is None:
+            continue
+        positions[uid] = {
+            'x': x, 'y': y,
+            'width': _px('width') or 0.0,
+            'height': _px('height') or 0.0,
+        }
+    return positions
+
+
+def detect_filter_area(parser, texts, widgets, positions=None):
     """
     识别管理后台页面的筛选区域。
 
     筛选区识别逻辑：
       1) 文本中含筛选关键词（筛选/查询/搜索条件等）
       2) 或文本中含筛选操作按钮（查询/搜索/重置/清空）且同时存在下拉框/输入框
-      3) 字段标签：从 texts 中按出现顺序提取，匹配 _FILTER_FIELD_HINTS 的优先纳入
+      3) 字段标签（需坐标核实时须同时满足三重证据）：
+         a. 位于查询/重置按钮同一行带（±50px，按钮左侧）
+         b. 右侧紧邻输入控件（input/select，水平间距 ≤360px 且垂直对齐 ±40px）
+         c. 排除数据值（_is_data_value：IP/纯数字/重复值等）
+      4) 无坐标（单文件模式/缺 CSS）时退化为全文关键词匹配（未经核实）
+
+    positions: {控件id: {x, y, width, height}}，来自 files/<页面>/styles.css
 
     返回:
         {
             'has_filter': bool,
             'filter_fields': [{label, control_type, required, default_value, note}],
             'filter_actions': [str],   # 查询/重置等按钮
+            'verified': bool,          # 字段标签是否经过坐标核实
         }
     """
     text_blob = ' '.join(texts)
@@ -484,29 +559,84 @@ def detect_filter_area(parser, texts, widgets):
             'has_filter': False,
             'filter_fields': [],
             'filter_actions': [],
+            'verified': False,
         }
 
-    # 提取筛选字段：按 texts 出现顺序，匹配 HINTS 或位于筛选关键词前后的标签
+    # ---- 坐标核实准备：以查询/重置等按钮为锚点 ----
+    text_pos = getattr(parser, 'text_positions', []) or []
+    anchors = []  # [(text, {x,y,...})]
+    if positions:
+        for item in text_pos:
+            t, uid = item[0], item[1]
+            if t in _FILTER_ACTION_KEYWORDS and uid in positions:
+                anchors.append((t, positions[uid]))
+
+    # ---- 提取筛选字段 ----
+    # 有锚点坐标：候选须同时满足三重证据——
+    #   ① 查询/重置按钮同一行带（±50px、按钮左侧）；
+    #   ② 文本矩形落在某输入控件矩形内（Axure 的筛选标签是叠加在
+    #      text_field/下拉框内部的文本层；动态面板各状态绝对定位互相堆叠，
+    #      仅靠"同行带+邻近"会把表格数据/树节点/按钮文字全捞进来）；
+    #   ③ 非数据值（IP/纯数字/页面重复出现的值）。
+    # 无锚点坐标：退化为全文关键词匹配（hint 词表/冒号结尾），标注未经核实。
     filter_fields = []
     seen_labels = set()
-    for t in texts:
-        # 跳过按钮文字/操作文字
-        if t in _FILTER_ACTION_KEYWORDS or t in _FILTER_AREA_KEYWORDS:
-            continue
-        # 匹配字段提示后缀
-        is_field_label = any(t.endswith(hint) or hint in t
-                              for hint in _FILTER_FIELD_HINTS)
-        # 短文本（<=10 字符）且以"："或":"结尾也视为字段标签
-        ends_with_colon = t.endswith('：') or t.endswith(':')
-        if (is_field_label or ends_with_colon) and t not in seen_labels:
+    verified_count = 0
+    if anchors:
+        input_ids = getattr(parser, 'input_widget_ids', set()) or set()
+        input_pos = [positions[i] for i in input_ids if i in positions]
+        for item in text_pos:
+            t, uid = item[0], item[1]
+            in_tree = len(item) > 2 and item[2]
+            if (t in _FILTER_ACTION_KEYWORDS or t in _FILTER_AREA_KEYWORDS
+                    or t in seen_labels or len(t) > 12 or in_tree):
+                continue
+            if not uid or uid not in positions:
+                continue
+            p = positions[uid]
+            in_band = any(abs(p['y'] - a['y']) <= 50 and p['x'] < a['x'] + 60
+                          for _, a in anchors)
+            if not in_band:
+                continue
+            if _is_data_value(t, texts):
+                continue
+            # 标签文本层与输入框的空间关系（Net Scaler 实测：标签叠加在
+            # text_field 内左缘，偏移 ~9px，单行小文本 h≈17px；树节点/
+            # 表格文本 h≥29 且不对齐输入框）：
+            # 水平对齐 |Δx|≤30 且垂直对齐 |Δy|≤25 且文本为单行小文本
+            aligned_input = any(
+                abs(ip['x'] - p['x']) <= 30
+                and abs(ip['y'] - p['y']) <= 25
+                for ip in input_pos)
+            if not (aligned_input and (p['height'] or 24) <= 24):
+                continue
+            seen_labels.add(t)
+            verified_count += 1
             filter_fields.append({
                 'label': t,
                 'control_type': '待确认',     # 不臆想，从页面控件对应
                 'required': '待确认',
                 'default_value': '待确认',
-                'note': '从页面文本提取的字段标签，控件类型/必填/默认值需对照原型确认',
+                'note': '坐标核实：与输入控件对齐的筛选行标签',
             })
+    else:
+        for item in (text_pos if text_pos else [(t, '', False) for t in texts]):
+            t = item[0]
+            if t in _FILTER_ACTION_KEYWORDS or t in _FILTER_AREA_KEYWORDS:
+                continue
+            is_field_label = any(t.endswith(hint) or hint in t
+                                 for hint in _FILTER_FIELD_HINTS)
+            ends_with_colon = t.endswith('：') or t.endswith(':')
+            if (not (is_field_label or ends_with_colon)) or t in seen_labels:
+                continue
             seen_labels.add(t)
+            filter_fields.append({
+                'label': t,
+                'control_type': '待确认',
+                'required': '待确认',
+                'default_value': '待确认',
+                'note': '关键词匹配（未经坐标核实），控件类型/必填/默认值需对照原型确认',
+            })
 
     # 提取筛选操作按钮
     filter_actions = [t for t in texts if t in _FILTER_ACTION_KEYWORDS]
@@ -522,6 +652,7 @@ def detect_filter_area(parser, texts, widgets):
         'has_filter': True,
         'filter_fields': filter_fields,
         'filter_actions': dedup_actions,
+        'verified': bool(anchors) and verified_count > 0,
     }
 
 
@@ -894,14 +1025,23 @@ def parse_page_html(filepath):
     texts = parser.texts
     widgets = parser.widget_comments
 
+    # 页面级 CSS 坐标（完整导出包才有：files/<页面名>/styles.css），
+    # 供筛选区域坐标核实；单文件模式拿不到则走关键词降级
+    positions = {}
+    html_dir = os.path.dirname(os.path.abspath(filepath))
+    page_name = os.path.splitext(os.path.basename(filepath))[0]
+    styles_css = os.path.join(html_dir, 'files', page_name, 'styles.css')
+    if os.path.exists(styles_css):
+        positions = parse_page_css_positions(styles_css)
+
     # 截图拼接识别
     is_composite, evidence = detect_screenshot_composite(parser, texts)
 
     # 严格字段提取（禁止臆想）
     strict = extract_page_fields_strict(texts, widgets)
 
-    # 筛选区域识别
-    filter_area = detect_filter_area(parser, texts, widgets)
+    # 筛选区域识别（含坐标核实）
+    filter_area = detect_filter_area(parser, texts, widgets, positions)
 
     # 表格列头提取
     table_columns = extract_table_columns_from_html(html_content)
@@ -920,41 +1060,303 @@ def parse_page_html(filepath):
     }
 
 
+# ---------------------------------------------------------------------------
+# Axure RP 10 压缩格式 data.js 求值器
+# 新版 Axure 导出的 data.js 形如：
+#   $axure.loadCurrentPage((function() {
+#       var _ = function() {...};
+#       var _creator = function() { return _(b,c,...); };
+#       var b="url", c="实例管理.html", ...;
+#       return _creator();
+#   })());
+# 键值被替换为符号变量，旧的正则提取完全失效，必须先求值还原对象图。
+# ---------------------------------------------------------------------------
+
+def _tokenize_js_expr(expr):
+    """把 JS 表达式切成 (kind, value) token 流。"""
+    tokens = []
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c.isspace():
+            i += 1
+        elif c == '"':
+            j = i + 1
+            buf = []
+            while j < n:
+                if expr[j] == '\\':
+                    buf.append(expr[j:j + 2]); j += 2
+                elif expr[j] == '"':
+                    break
+                else:
+                    buf.append(expr[j]); j += 1
+            tokens.append(('str', json.loads('"' + ''.join(buf) + '"')))
+            i = j + 1
+        elif c in '()[]{},:':
+            tokens.append((c, c)); i += 1
+        elif c.isdigit() or (c == '-' and i + 1 < n and expr[i + 1].isdigit()):
+            m = re.match(r'-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?', expr[i:])
+            tokens.append(('num', float(m.group(0)))); i += m.end()
+        elif c.isalpha() or c in '_$':
+            m = re.match(r'[A-Za-z_$][\w$]*', expr[i:])
+            tokens.append(('ident', m.group(0))); i += m.end()
+        else:
+            raise ValueError(f'无法识别的字符 {c!r} @ {i}')
+    return tokens
+
+
+class _JsExprParser:
+    """递归下降求值 Axure 压缩 JS 的表达式子集（_/数组/字面量/标识符）。"""
+
+    def __init__(self, tokens, symbols):
+        self.toks = tokens
+        self.pos = 0
+        self.symbols = symbols
+
+    def peek(self):
+        return self.toks[self.pos] if self.pos < len(self.toks) else (None, None)
+
+    def next(self):
+        t = self.peek()
+        self.pos += 1
+        return t
+
+    def parse(self):
+        v = self._expr()
+        if self.pos != len(self.toks):
+            raise ValueError(f'表达式存在多余 token @ {self.pos}')
+        return v
+
+    def _expr(self):
+        kind, val = self.peek()
+        if kind in ('str', 'num'):
+            self.next()
+            return val
+        if kind == 'ident':
+            self.next()
+            if val in ('true', 'false'):
+                return val == 'true'
+            if val == 'null':
+                return None
+            if self.peek()[0] == '(':
+                self.next()
+                args = []
+                if self.peek()[0] != ')':
+                    args.append(self._expr())
+                    while self.peek()[0] == ',':
+                        self.next()
+                        args.append(self._expr())
+                if self.next()[0] != ')':
+                    raise ValueError('缺少右括号')
+                if val == '_':
+                    # JS 语义：奇数参数时末尾键的值为 undefined，JSON 序列化会丢弃
+                    if len(args) % 2 != 0:
+                        args = args[:-1]
+                    # JS 语义：对象作键时被 coerce 成字符串
+                    for ki in range(0, len(args), 2):
+                        if not isinstance(args[ki], (str, int, float, bool)) \
+                                and args[ki] is not None:
+                            args[ki] = json.dumps(args[ki], ensure_ascii=False,
+                                                  sort_keys=True)
+                    return {args[i]: args[i + 1] for i in range(0, len(args), 2)}
+                raise ValueError(f'未知函数 {val}（求值器仅支持 _ 组合器）')
+            return self.symbols.get(val, f'<未定义:{val}>')
+        if kind == '[':
+            self.next()
+            items = []
+            while self.peek()[0] != ']':
+                items.append(self._expr())
+                if self.peek()[0] == ',':
+                    self.next()
+            self.next()
+            return items
+        if kind == '{':
+            self.next()
+            obj = {}
+            while self.peek()[0] != '}':
+                k = self._expr()
+                if self.next()[0] != ':':
+                    raise ValueError('缺少冒号')
+                obj[k] = self._expr()
+                if self.peek()[0] == ',':
+                    self.next()
+            self.next()
+            return obj
+        raise ValueError(f'意外 token {kind}:{val}')
+
+
+def evaluate_axure_data_js(content):
+    """求值 RP10 压缩 data.js，返回页面对象 dict。失败抛异常。"""
+    symbols = {}
+    for m in re.finditer(
+            r'(?<![\w$])([A-Za-z_$][\w$]*)\s*=\s*("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?|true|false|null)',
+            content):
+        raw = m.group(2)
+        if raw.startswith('"'):
+            symbols[m.group(1)] = json.loads(raw)
+        elif re.match(r'^-?\d', raw):
+            symbols[m.group(1)] = float(raw)
+        else:
+            symbols[m.group(1)] = {'true': True, 'false': False, 'null': None}[raw]
+
+    m = re.search(r'_creator\s*=\s*function\s*\(\)\s*\{\s*return\s+', content)
+    if not m:
+        raise ValueError('未找到 _creator 函数')
+    start = m.end()
+    # 字符串感知 + 括号深度追踪，扫描 return 表达式的结束分号
+    i, depth, in_str = start, 0, False
+    while i < len(content):
+        c = content[i]
+        if in_str:
+            if c == '\\':
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        else:
+            if c == '"':
+                in_str = True
+            elif c in '([':
+                depth += 1
+            elif c in ')]':
+                depth -= 1
+            elif c == ';' and depth == 0:
+                break
+        i += 1
+    parser = _JsExprParser(_tokenize_js_expr(content[start:i]), symbols)
+    return parser.parse()
+
+
+def _walk_widgets_rp10(node, out):
+    """深度优先收集对象图中带 friendlyType 的控件节点。"""
+    if isinstance(node, dict):
+        if 'friendlyType' in node:
+            out.append(node)
+        for v in node.values():
+            _walk_widgets_rp10(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _walk_widgets_rp10(v, out)
+
+
+def extract_widgets_interactions_rp10(page_obj):
+    """从求值后的页面对象图提取控件与交互，输出 schema 与旧版正则路径一致。
+
+    widgets: [{id, label, friendlyType, type_en, x, y, width, height}]
+    interactions: [{event, event_type, widget_label, action, description, target}]
+    """
+    type_map = {
+        '矩形': 'rectangle', '按钮': 'button', '图片': 'image', '图片 ': 'image',
+        '文本段落': 'text', '输入框': 'input', '文本框': 'textarea',
+        '下拉列表': 'dropdown', '复选框': 'checkbox', '单选按钮': 'radio',
+        '表格': 'table', '单元格': 'table_cell', '树': 'tree', '节点': 'tree_node',
+        '动态面板': 'dynamic_panel', '中继器': 'repeater',
+        '水平线': 'horizontal_line', '垂直线': 'vertical_line',
+        '热区': 'hot_spot', '内联框架': 'inline_frame', '形状': 'shape',
+    }
+
+    nodes = []
+    _walk_widgets_rp10(page_obj, nodes)
+
+    widgets = []
+    interactions = []
+    for node in nodes:
+        w_type = node.get('friendlyType', '') or ''
+        style = node.get('style') or {}
+        loc = style.get('location') or {}
+        size = style.get('size') or {}
+        widgets.append({
+            'id': node.get('id', ''),
+            'label': node.get('label', '') or '',
+            'friendlyType': w_type,
+            'type_en': type_map.get(w_type, w_type),
+            'x': loc.get('x'), 'y': loc.get('y'),
+            'width': size.get('width'), 'height': size.get('height'),
+        })
+
+        imap = node.get('interactionMap')
+        if not isinstance(imap, dict):
+            continue
+        w_label = node.get('label', '') or ''
+        for event_key, ev in imap.items():
+            if not isinstance(ev, dict):
+                continue
+            event_type = ev.get('eventType', event_key)
+            for case in ev.get('cases', []) or []:
+                for act in case.get('actions', []) or []:
+                    if not isinstance(act, dict):
+                        continue
+                    item = {
+                        'event': event_key,
+                        'event_type': event_type,
+                        'widget_label': w_label,
+                        'action': act.get('action', ''),
+                        'description': act.get('description', '')
+                            or act.get('displayName', ''),
+                        'target': '',
+                    }
+                    target = act.get('target')
+                    if isinstance(target, dict) and target.get('url'):
+                        item['target'] = target['url']
+                    interactions.append(item)
+
+    return {'widgets': widgets, 'interactions': interactions}
+
+
 def parse_page_data_js(filepath):
     """
     解析 files/<页面名>/data.js，提取控件详细信息和交互事件。
-    
-    返回控件列表，每个控件包含：
-    - id: 控件ID
-    - label: 控件标签
-    - friendlyType: 控件友好类型
+
+    优先用 RP10 求值器（新版 Axure 压缩导出），
+    失败或无压缩特征时退回旧版正则（Axure 8/9 明文格式）。
+
+    返回 {'widgets': [...], 'interactions': [...], 'extractor': str}
     """
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, 'r', encoding='utf-8-sig') as f:
             content = f.read()
     except (FileNotFoundError, IOError):
-        return {'widgets': [], 'interactions': []}
-    
+        return {'widgets': [], 'interactions': [], 'extractor': 'missing'}
+
+    # 新版 Axure（RP9+/RP10）压缩导出：符号替换 + _() 组合器
+    if 'loadCurrentPage' in content:
+        try:
+            page_obj = evaluate_axure_data_js(content)
+            result = extract_widgets_interactions_rp10(page_obj)
+            if result['widgets']:
+                result['extractor'] = 'rp10_eval'
+                return result
+        except Exception:
+            pass  # 求值失败则退回正则路径
+
+    # 旧版正则路径（Axure 8/9 明文格式）
+    legacy = _parse_page_data_js_legacy(content)
+    legacy['extractor'] = 'legacy_regex'
+    return legacy
+
+
+def _parse_page_data_js_legacy(content):
+    """旧版 data.js 提取：正则匹配明文 "key","value" 对。"""
     # 提取控件数据
     # 在压缩代码中查找：label、friendlyType 等字段
     # 提取所有 "label","value" 和 "friendlyType","value" 对
     labels = re.findall(r'"label","([^"]*)"', content)
     types = re.findall(r'"friendlyType","([^"]*)"', content)
     ids = re.findall(r'"id","([^"]+)"', content)
-    
+
     # 交互事件
     interactions = []
     # onClick 事件
     click_descriptions = re.findall(r'"onClick"[^}]*"description","([^"]*)"', content)
     for desc in click_descriptions:
         interactions.append({'event': 'onClick', 'description': desc})
-    
+
     # 其他交互
     for event_type in ['onMouseEnter', 'onMouseLeave', 'onLoad', 'onChange']:
         event_matches = re.findall(event_type + r'[^}]*"description","([^"]*)"', content)
         for desc in event_matches:
             interactions.append({'event': event_type, 'description': desc})
-    
+
     # 控件类型映射
     type_map = {
         '矩形': 'rectangle',
@@ -979,7 +1381,7 @@ def parse_page_data_js(filepath):
         '内联框架': 'inline_frame',
         '形状': 'shape',
     }
-    
+
     widgets = []
     for i, (w_id, label, w_type) in enumerate(zip(ids, labels, types)):
         en_type = type_map.get(w_type, w_type)
@@ -989,7 +1391,7 @@ def parse_page_data_js(filepath):
             'friendlyType': w_type,
             'type_en': en_type,
         })
-    
+
     return {'widgets': widgets, 'interactions': interactions}
 
 
@@ -1533,6 +1935,15 @@ def parse_single_html_file(filepath):
         'widgets': html_data['widgets'],
         'notes': html_data.get('notes', []),
         'has_sitemap': document_js is not None,
+        # 透传 HTML 层增强字段（与目录模式每页字段保持一致）
+        'is_screenshot_composite': html_data.get('is_screenshot_composite', False),
+        'screenshot_evidence': html_data.get('screenshot_evidence', ''),
+        'strict_fields': html_data.get('strict_fields', []),
+        'ambiguous_fields': html_data.get('ambiguous_fields', []),
+        'filter_area': html_data.get('filter_area', {
+            'has_filter': False, 'filter_fields': [], 'filter_actions': [],
+        }),
+        'table_columns': html_data.get('table_columns', []),
     }
     
     if document_js:
