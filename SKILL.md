@@ -364,7 +364,7 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 
 **生成前读取 `references/开发计划.md`**（模块拆分表含工时/依赖/角色 + 4 里程碑 + 风险项、便签影响工时/风险）**→ 跑 `scripts/generate_dev_plan.py`** 生成 `开发计划.md`。
 
-### 5. 输出文件管理
+### 6. 输出文件管理
 
 - 所有输出存放在原型目录下的 `output/` 文件夹中
 - 按交付物类型单文件命名：`PRD.md`、`功能清单.xlsx`、`测试用例.xlsx`、`数据字典.md`、`页面跳转关系图.md`、`用户故事.md`、`开发计划.md`
@@ -372,9 +372,9 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 - md 交付物各自独立单文件，不合并
 - 如果用户指定了输出位置，则保存到指定位置
 
-### 6. 可选流程：调用 requirement-analysis 进行需求澄清与分析
+### 7. 可选流程：调用 requirement-analysis 进行需求澄清与分析
 
-**触发时机**：在步骤 5 完成交付物生成、确认所有文件已写入 `output/` 之后。
+**触发时机**：在步骤 6 完成交付物输出归档（所有文件已写入 `output/`）之后。
 
 **前置条件**（任一满足即可询问）：
 
@@ -384,7 +384,7 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 
 > 若本次仅生成了页面跳转关系图/数据字典/开发计划等非"需求主体"交付物，仍可询问，但向用户说明"需求澄清对 PRD/功能清单类交付物收益更大"。
 
-#### 6.1 询问用户是否调用
+#### 7.1 询问用户是否调用
 
 生成交付物后，**主动询问**用户是否需要调用 `requirement-analysis` skill 进行需求澄清和分析：
 
@@ -401,7 +401,7 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 > - **A. ✅ 调用** — 启动 `requirement-analysis` skill，对已生成的 PRD/功能清单进行需求澄清、冲突检测、INVEST 质量评估
 > - **B. ⏭️ 跳过** — 当前交付物已满足需求，流程结束
 
-#### 6.2 调用 requirement-analysis skill
+#### 7.2 调用 requirement-analysis skill
 
 用户选择 A 后，**调用 `requirement-analysis` skill**，并传入以下上下文：
 
@@ -436,7 +436,7 @@ use_skill:
     请对已生成的 PRD 进行需求澄清、冲突检测与 INVEST 质量评估。
 ```
 
-#### 6.3 requirement-analysis skill 接管后的行为
+#### 7.3 requirement-analysis skill 接管后的行为
 
 `requirement-analysis` skill 被调用后，将基于传入的 PRD/功能清单执行：
 
@@ -455,17 +455,17 @@ use_skill:
 - `output/需求澄清报告.md` — requirement-analysis 生成的澄清报告（若该 skill 支持）
 - `output/质量评估报告.md` — INVEST 六维质量评估报告（若该 skill 支持）
 
-#### 6.4 边界处理
+#### 7.4 边界处理
 
 - **用户选择 B（跳过）** → 流程直接结束，不调用 requirement-analysis
 - **requirement-analysis skill 未安装** → 检测 `~/.atomcode/skills/requirement-analysis/` 是否存在；不存在则告知用户"requirement-analysis skill 未安装，跳过需求澄清，可手动安装后重试"，流程结束
 - **requirement-analysis skill 调用失败** → 捕获错误，告知用户"需求澄清调用失败：[错误信息]，当前交付物保留在 output/ 目录"，流程结束
-- **用户在步骤 4 已明确说"调用 requirement-analysis"或"进行需求澄清"** → 跳过 6.1 询问，直接执行 6.2 调用
-- **用户在步骤 4 已明确说"不需要需求澄清"** → 跳过整个步骤 6
+- **用户在步骤 4 已明确说"调用 requirement-analysis"或"进行需求澄清"** → 跳过 7.1 询问，直接执行 7.2 调用
+- **用户在步骤 4 已明确说"不需要需求澄清"** → 跳过整个步骤 7
 - **PRD 未生成但功能清单已生成** → 仍可调用，requirement-analysis 会以功能清单为主输入反推 PRD
 - **本次仅生成了页面跳转关系图** → 询问时说明"需求澄清对 PRD/功能清单类交付物收益更大，当前仅有页面跳转关系图，建议先在步骤 4 选择生成 PRD"
 
-#### 6.5 流程总览
+#### 7.5 流程总览
 
 ```
 步骤 1-2: 识别原型类型 → 解析原型结构
@@ -476,7 +476,9 @@ use_skill:
     ↓
 步骤 5: 生成交付物 → 写入 output/
     ↓
-步骤 6: 询问是否调用 requirement-analysis 进行需求澄清
+步骤 6: 输出文件管理（output/ 归档）
+    ↓
+步骤 7: 询问是否调用 requirement-analysis 进行需求澄清
     ├── A. 调用 → use_skill("requirement-analysis", ...) → requirement-analysis 接管 8 阶段流程
     └── B. 跳过 → 流程结束
 ```
