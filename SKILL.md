@@ -336,33 +336,11 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 
 生成脚本接受统一参数：`<解析JSON> [输出路径]`，默认输出到 CWD。脚本内的推断函数（如 `infer_features_for_page`）实现了对应 reference 规范中描述的列定义、分组、便签纳入规则——若需调整推断逻辑，直接编辑脚本对应函数即可。
 
-#### 📄 PRD（产品需求文档）
+**各交付物生成要点**（列结构见步骤 4 交付物菜单；便签纳入规则见「便签/备注说明的解析与纳入」章节；详细规范以对应 reference 文件为准，生成前必须读取）：
 
-**生成前读取 `references/PRD-template.md`**。含完整 PRD 文档结构与各章节填写指引，便签/备注说明纳入功能需求项和附录汇总。PRD 由模型 inline 生成（结构灵活，无独立脚本）。
-
-#### 📋 功能清单（xlsx）
-
-**生成前读取 `references/功能清单.md`**（8 列结构、按页面分组、便签纳入规则）**→ 跑 `scripts/generate_feature_list.py`** 生成 `功能清单.xlsx`。8 列：功能编号/模块/功能名称/功能描述/优先级/所属页面/关联功能/备注。
-
-#### 🧪 测试用例（xlsx）
-
-**生成前读取 `references/测试用例.md`**（8 列结构、按模块分组、用例编号全局递增、便签纳入规则）**→ 跑 `scripts/generate_test_cases.py`** 生成 `测试用例.xlsx`。8 列：用例编号/模块/功能点/用例标题/前置条件/测试步骤/预期结果/优先级。
-
-#### 📊 数据字典（md）
-
-**生成前读取 `references/数据字典.md`**（9 列字段表、按页面分组、便签优先填"说明"/"备注"列）**→ 跑 `scripts/generate_data_dict.py`** 生成 `数据字典.md`。9 列：字段名/中文名/类型/长度/必填/默认值/说明/所属页面/备注。
-
-#### 🔗 页面跳转关系图（md）
-
-**生成前读取 `references/页面跳转关系图.md`**（Mermaid 流程图 + 跳转详表 + 孤立页面清单、便签补跳转条件）**→ 跑 `scripts/generate_page_flow.py`** 生成 `页面跳转关系图.md`。
-
-#### 🎯 用户故事（md）
-
-**生成前读取 `references/用户故事.md`**（角色定义 + 故事地图 + 详表 + 验收标准、便签补独立故事/验收标准）**→ 跑 `scripts/generate_user_stories.py`** 生成 `用户故事.md`。
-
-#### 📅 开发计划（md）
-
-**生成前读取 `references/开发计划.md`**（模块拆分表含工时/依赖/角色 + 4 里程碑 + 风险项、便签影响工时/风险）**→ 跑 `scripts/generate_dev_plan.py`** 生成 `开发计划.md`。
+- PRD 由模型 inline 生成（结构灵活），其余 6 类交付物优先跑生成脚本产出文件
+- 测试用例的用例编号全局递增，不按模块重置
+- 用户要求的输出格式与默认格式不同时（如测试用例要 md 而非 xlsx），仍按对应 reference 的列结构 inline 生成，不改变列定义
 
 ### 6. 输出文件管理
 
@@ -503,13 +481,7 @@ use_skill:
 
 ### 工具识别（detect_tool_type）
 
-脚本按以下顺序识别工具类型，第一个匹配成功即返回（同工作流步骤 1 的表格）：
-
-1. **Axure**：`data/document.js` 或 `resources/scripts/axure/`
-2. **墨刀**：`index.html` 含 `mockplus`/`mp-`，或含 `mockplus.js`/`mp.js`
-3. **MasterGo**：`index.html` 含 `mastergo`，或 JS 含 `PAGED_FRAMES`/`FILE_DATA`
-4. **蓝湖**：含 `lanhu`/`lanhuapp`、`.schema.json` 文件，或 JS 含 `lanhutext`/`lanhuimage`
-5. **未知**：退化为通用 HTML 扫描
+脚本按「Axure → 墨刀 → MasterGo → 蓝湖 → 未知」顺序识别工具类型，判定特征同工作流步骤 1 的表格，第一个匹配成功即返回。**降级原则**：任一工具缺数据源时退化为通用 HTML 扫描，输出中标注"降级版本"。
 
 ### 各工具解析深度对比
 
