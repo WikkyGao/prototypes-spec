@@ -1,17 +1,17 @@
 [
   {
     "id": 1,
-    "prompt": "我这边有一个 Axure 原型导出的目录，在 /Users/wikky/Documents/skills/axure-prototypes-prd/Net Scaler 下面，是一个服务管理后台的原型。请帮我解析这个原型，然后生成一份 PRD（产品需求文档），输出 Markdown 格式。",
+    "prompt": "我这边有一个 Axure 原型导出的目录，在 /Users/wikky/Documents/skills/specs temp/Net Scaler 下面，是一个服务管理后台的原型。请帮我解析这个原型，然后生成一份 PRD（产品需求文档），输出 Markdown 格式。",
     "expected": "生成 PRD.md，包含产品概述、页面结构（含页面树）、功能需求（按模块）、非功能需求等章节；内容基于原型文本不编造"
   },
   {
     "id": 2,
-    "prompt": "请帮我分析 /Users/wikky/Documents/skills/axure-prototypes-prd/Net Scaler 这个 Axure 原型，生成一份功能清单（Excel xlsx 格式）和一份测试用例文档（Markdown 格式）。功能清单需要包含模块、功能名称、功能描述、优先级这些列。测试用例需要包含模块、功能点、测试场景、前置条件、测试步骤、预期结果。",
+    "prompt": "请帮我分析 /Users/wikky/Documents/skills/specs temp/Net Scaler 这个 Axure 原型，生成一份功能清单（Excel xlsx 格式）和一份测试用例文档（Markdown 格式）。功能清单需要包含模块、功能名称、功能描述、优先级这些列。测试用例需要包含模块、功能点、测试场景、前置条件、测试步骤、预期结果。",
     "expected": "生成 功能清单.xlsx（含4列）和 测试用例.md（含6列），覆盖所有主要页面模块，按模块组织"
   },
   {
     "id": 3,
-    "prompt": "我这里有一个 Axure 原型导出的单个 HTML 页面，是 /Users/wikky/Documents/skills/axure-prototypes-prd/Net Scaler/实例管理.html，请帮我解析这个页面，然后生成一份页面分析报告，包括页面名称、核心功能、页面上的所有控件和交互、以及数据字段定义。",
+    "prompt": "我这里有一个 Axure 原型导出的单个 HTML 页面，是 /Users/wikky/Documents/skills/specs temp/Net Scaler/实例管理.html，请帮我解析这个页面，然后生成一份页面分析报告，包括页面名称、核心功能、页面上的所有控件和交互、以及数据字段定义。",
     "expected": "生成 页面分析报告.md，含页面名称、功能区域、控件类型列表、数据字段、交互事件"
   },
   {
