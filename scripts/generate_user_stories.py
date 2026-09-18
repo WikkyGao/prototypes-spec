@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import datetime
+from pathlib import Path
 
 
 def infer_roles(pages):
@@ -251,8 +252,14 @@ def generate_user_stories_md(pages, output_path):
     lines.append('- 角色为基于原型内容的推断，需结合实际业务确认')
     lines.append('- 验收标准来自原型文本，未体现的标注为"待补充"')
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+    # 规范化并校验输出路径，仅允许写入当前工作目录内，防止路径穿越
+    base = os.path.realpath(os.getcwd())
+    output_path = os.path.realpath(output_path)
+    if output_path != base and not output_path.startswith(base + os.sep):
+        raise SystemExit(f'输出路径越界，仅允许写入当前工作目录内：{output_path}')
+    os.makedirs(os.path.dirname(output_path) or base, exist_ok=True)
+
+    Path(output_path).write_text('\n'.join(lines), encoding='utf-8')
 
 
 def main():

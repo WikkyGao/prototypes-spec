@@ -339,6 +339,7 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 **各交付物生成要点**（列结构见步骤 4 交付物菜单；便签纳入规则见「便签/备注说明的解析与纳入」章节；详细规范以对应 reference 文件为准，生成前必须读取）：
 
 - PRD 由模型 inline 生成（结构灵活），其余 6 类交付物优先跑生成脚本产出文件
+- PRD 的功能需求中，每个功能项在"功能描述"后按 `references/PRD-template.md` 增加「截图」与「相关页面」小节：「相关页面」嵌入该功能所属页面的原型截图（截图导出到 `output/screenshots/`，PRD 中用相对路径引用），「截图」放用户另行提供的现状界面截图（如有）；无对应素材的功能项省略小节
 - 测试用例的用例编号全局递增，不按模块重置
 - 用户要求的输出格式与默认格式不同时（如测试用例要 md 而非 xlsx），仍按对应 reference 的列结构 inline 生成，不改变列定义
 

@@ -12,6 +12,7 @@ import os
 import re
 import sys
 import datetime
+from pathlib import Path
 
 
 def to_camel_case(text):
@@ -131,8 +132,14 @@ def generate_data_dictionary_md(pages, output_path):
         lines.append('- 便签/矩形内备注说明已纳入字段定义（"说明"和"备注"列）')
     lines.append('- 字段类型基于原型控件类型推断，长度为推测值，需开发确认')
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+    # 规范化并校验输出路径，仅允许写入当前工作目录内，防止路径穿越
+    base = os.path.realpath(os.getcwd())
+    output_path = os.path.realpath(output_path)
+    if output_path != base and not output_path.startswith(base + os.sep):
+        raise SystemExit(f'输出路径越界，仅允许写入当前工作目录内：{output_path}')
+    os.makedirs(os.path.dirname(output_path) or base, exist_ok=True)
+
+    Path(output_path).write_text('\n'.join(lines), encoding='utf-8')
 
 
 def main():
