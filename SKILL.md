@@ -2,7 +2,7 @@
 name: prototypes-spec
 slug: prototypes-spec
 displayName: prototypes-spec
-version: 1.2.0
+version: 1.2.1
 description: >
   从原型工具导出的 HTML 目录（或单个 HTML 文件）中自动识别页面结构、页面内容、控件和交互，
   生成 PRD（产品需求文档）、功能清单、测试用例、数据字典等开发交付物。
@@ -340,6 +340,9 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 
 - PRD 由模型 inline 生成（结构灵活），其余 6 类交付物优先跑生成脚本产出文件
 - PRD 的功能需求中，每个功能项在"功能描述"后按 `references/PRD-template.md` 增加「截图」与「相关页面」小节：「相关页面」嵌入该功能所属页面的原型截图（截图导出到 `output/screenshots/`，PRD 中用相对路径引用），「截图」放用户另行提供的现状界面截图（如有）；无对应素材的功能项省略小节
+- **截图询问（生成 PRD 前必做，不得静默省略截图小节）**：写 PRD 前向用户确认两件事——
+  1. **「相关页面」原型截图**：Axure 等工具导出自带页面图片时，直接复制/导出到 `output/screenshots/`；原型为纯 HTML（页面无 `<img>` 素材）时，询问"是否将各页渲染为全页截图嵌入"（可用 Playwright/Chrome headless 渲染），用户同意后渲染导出，拒绝则省略「相关页面」小节
+  2. **「截图」现状截图**：询问用户是否有现状界面截图需要纳入；有则请其提供文件路径并复制到 `output/screenshots/`，无则全部功能项省略「截图」小节
 - 测试用例的用例编号全局递增，不按模块重置
 - 用户要求的输出格式与默认格式不同时（如测试用例要 md 而非 xlsx），仍按对应 reference 的列结构 inline 生成，不改变列定义
 

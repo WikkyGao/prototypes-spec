@@ -1,7 +1,7 @@
 {
   "name": "prototypes-spec",
   "display_name": "原型→开发交付物生成器",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划等开发交付物。",
   "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, and development plans.",
   "author": {
@@ -55,6 +55,13 @@
     "通用 HTML 解析兜底"
   ],
   "changelog": [
+    {
+      "version": "1.2.1",
+      "date": "2026-09-20",
+      "changes": [
+        "feat: PRD 生成前强制「截图询问」步骤——确认纯 HTML 原型是否渲染全页截图嵌入「相关页面」、以及是否纳入现状界面截图，禁止静默省略截图小节"
+      ]
+    },
     {
       "version": "1.2.0",
       "date": "2026-09-18",
