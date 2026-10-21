@@ -1,19 +1,20 @@
 #!/bin/bash
 # 将本仓库（skill 源）同步到各 Agent 的 skill 部署目录。
-# 背景：ZCode/Claude 等加载的是 ~/.zcode/skills、~/.agents/skills 下的拷贝，
-# 不同步则开发仓库的新规则永远不会生效（2026-09-18 测试时踩坑）。
+# 背景：Claude/Codex 走 ~/.cc-switch，CodeBuddy/Kiro/ZCode 走 ~/.agents，
+# Agnes 走 ~/.agnes；不同步则开发仓库的新规则永远不会生效。
 # 用法: ./deploy.sh
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DESTS=(
-  "$HOME/.zcode/skills/prototypes-spec"
+  "$HOME/.cc-switch/skills/prototypes-spec"
   "$HOME/.agents/skills/prototypes-spec"
+  "$HOME/.agnes/skills/prototypes-spec"
 )
 
 for DEST in "${DESTS[@]}"; do
   mkdir -p "$DEST"
-  rsync -av \
+  rsync -av --delete \
     --exclude '.git' \
     --exclude '.DS_Store' \
     --exclude '.mimosa' \
