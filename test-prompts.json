@@ -48,5 +48,30 @@
     "id": 10,
     "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成数据库设计说明书（Markdown 格式），包含实体清单、ER 图、物理表结构、字段定义、索引设计和数据安全要求。",
     "expected": "生成 数据库设计说明书.md，含逻辑模型/ER 图/物理表/字段/索引；每表含 id、created_at、updated_at；字段类型、默认值、索引标注建议或待确认，不生成无业务字段的空表"
+  },
+  {
+    "id": 11,
+    "prompt": "请基于 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成一份试运行报告（Markdown 格式），包含试运行环境、范围、准备、执行记录、问题清单、整改计划和上线建议。",
+    "expected": "生成 试运行报告.md，含试运行概述/准备/执行/结果/整改建议/结论；原型未提供真实执行记录时，执行结果与指标标注待执行/待确认，不编造通过率"
+  },
+  {
+    "id": 12,
+    "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成一份维护手册（Markdown 格式），说明日常巡检、故障分级、变更发布、安全合规和应急预案。",
+    "expected": "生成 维护手册.md，含维护组织/日常维护/故障处理/变更发布/安全合规/应急预案；部署拓扑、监控工具、值班电话等未体现内容标注待确认"
+  },
+  {
+    "id": 13,
+    "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成一份面向最终用户的操作手册（Markdown 格式），包含登录、角色权限、各页面操作步骤、字段说明和常见问题。",
+    "expected": "生成 操作手册.md，含系统访问/角色权限/功能操作/常见场景/常见问题；操作步骤过滤 Click/MouseOver/显示隐藏等原型噪声，字段类型未知标待确认"
+  },
+  {
+    "id": 14,
+    "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成一份应用软件清单（Markdown 格式），列出业务应用模块、基础软件、中间件、版本、许可和部署位置。",
+    "expected": "生成 应用软件清单.md，含基础软件与中间件/业务应用模块/接口与外部依赖/版本许可/部署关系；业务模块来自原型页面，基础软件版本与许可标注建议或待确认"
+  },
+  {
+    "id": 15,
+    "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成一份系统参数配置说明（Markdown 格式），包含系统基础参数、业务参数候选、敏感参数、变更流程和环境差异。",
+    "expected": "生成 系统参数配置说明.md，含配置概述/参数清单/敏感参数/变更流程/环境差异；业务参数由配置页面字段推断并标注是否作为系统参数待确认，敏感参数不写明文"
   }
 ]

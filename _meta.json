@@ -1,9 +1,9 @@
 {
   "name": "prototypes-spec",
   "display_name": "原型→开发交付物生成器",
-  "version": "1.3.0",
-  "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划，以及系统概要说明书、详细说明书、数据库设计说明书等开发交付物。",
-  "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, development plans, system overview, detailed design, and database design documents.",
+  "version": "1.4.0",
+  "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划，以及系统概要说明书、详细说明书、数据库设计说明书、试运行报告、维护手册、操作手册、应用软件清单、系统参数配置说明等开发交付物。",
+  "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, development plans, system overview, detailed design, database design, trial run report, maintenance manual, operation manual, application inventory, and system parameter configuration documents.",
   "author": {
     "name": "WikkyGao",
     "email": "",
@@ -27,7 +27,12 @@
     "详细说明书",
     "数据库设计说明书",
     "概要设计",
-    "数据库设计"
+    "数据库设计",
+    "试运行报告",
+    "维护手册",
+    "操作手册",
+    "应用软件清单",
+    "系统参数配置说明"
   ],
   "triggers": [
     "Axure原型",
@@ -39,7 +44,12 @@
     "开发交付物",
     "系统概要说明书",
     "详细说明书",
-    "数据库设计说明书"
+    "数据库设计说明书",
+    "试运行报告",
+    "维护手册",
+    "操作手册",
+    "应用软件清单",
+    "系统参数配置说明"
   ],
   "platform": "atomcode",
   "min_agent_version": "1.0.0",
@@ -84,7 +94,12 @@
       "开发计划.md",
       "系统概要说明书.md",
       "详细说明书.md",
-      "数据库设计说明书.md"
+      "数据库设计说明书.md",
+      "试运行报告.md",
+      "维护手册.md",
+      "操作手册.md",
+      "应用软件清单.md",
+      "系统参数配置说明.md"
     ],
     "format": "markdown"
   },
@@ -101,19 +116,30 @@
       "generate_page_flow.py": "页面跳转关系图生成",
       "generate_user_stories.py": "用户故事生成",
       "generate_dev_plan.py": "开发计划生成",
-      "generate_spec_docs.py": "系统概要说明书/详细说明书/数据库设计说明书生成"
+      "generate_spec_docs.py": "系统概要说明书/详细说明书/数据库设计说明书/试运行报告/维护手册/操作手册/应用软件清单/系统参数配置说明生成"
     }
   },
   "features": [
     "多原型工具支持 (Axure/Mockplus/MasterGo/蓝湖)",
     "自动识别页面结构、控件和交互",
-    "10 种开发交付物一键生成",
+    "15 种开发交付物一键生成",
+    "新增试运行报告、维护手册、操作手册、应用软件清单、系统参数配置说明",
     "新增系统概要说明书、详细说明书、数据库设计说明书",
     "页面分类与截图拼接识别",
     "便签/备注说明纳入",
     "通用 HTML 解析兜底"
   ],
   "changelog": [
+    {
+      "version": "1.4.0",
+      "date": "2026-10-21",
+      "changes": [
+        "feat: 新增试运行报告、维护手册、操作手册、应用软件清单、系统参数配置说明五类内置模板",
+        "feat: generate_spec_docs.py 新增 trial-run-report/maintenance-manual/operation-manual/application-inventory/system-parameters 五种 --doc-type",
+        "feat: 操作手册过滤原型运行时噪声，生成面向最终用户的操作步骤",
+        "docs: 更新 SKILL.md、readme.md 与五类 reference 规范，交付物总数扩展为 15 类"
+      ]
+    },
     {
       "version": "1.3.0",
       "date": "2026-10-21",

@@ -1,9 +1,9 @@
 {
   "name": "prototypes-spec",
   "displayName": "原型→开发交付物生成器",
-  "version": "1.3.0",
-  "description": "从原型工具导出的 HTML 中自动识别页面结构，生成 PRD、功能清单、测试用例、系统概要说明书、详细说明书、数据库设计说明书等开发交付物",
-  "description_en": "Parse prototype HTML exports to auto-generate PRD, feature lists, test cases, system overview, detailed design, and database design documents",
+  "version": "1.4.0",
+  "description": "从原型工具导出的 HTML 中自动识别页面结构，生成 PRD、功能清单、测试用例、系统概要说明书、详细说明书、数据库设计说明书、试运行报告、维护手册、操作手册、应用软件清单、系统参数配置说明等开发交付物",
+  "description_en": "Parse prototype HTML exports to auto-generate PRD, feature lists, test cases, system overview, detailed design, database design, trial run report, maintenance manual, operation manual, application inventory, and system parameter configuration documents",
   "author": "WikkyGao",
   "license": "MIT",
   "type": "module",
@@ -20,7 +20,12 @@
     "详细说明书",
     "数据库设计说明书",
     "概要设计",
-    "数据库设计"
+    "数据库设计",
+    "试运行报告",
+    "维护手册",
+    "操作手册",
+    "应用软件清单",
+    "系统参数配置说明"
   ],
   "engines": {
     "atomcode": ">=1.0.0"
@@ -42,7 +47,12 @@
       "开发交付物",
       "系统概要说明书",
       "详细说明书",
-      "数据库设计说明书"
+      "数据库设计说明书",
+      "试运行报告",
+      "维护手册",
+      "操作手册",
+      "应用软件清单",
+      "系统参数配置说明"
     ],
     "formats": [
       ".html",
