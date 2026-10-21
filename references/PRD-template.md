@@ -1,6 +1,6 @@
 # PRD 模板
 
-> 本模板定义了 requirement-analysis skill 生成 PRD.md 的标准格式。
+> 本模板定义了 prototypes-spec skill 生成 PRD.md 的标准格式。
 > 生成 PRD 时应严格遵循此模板的章节结构和格式规范。
 
 ---

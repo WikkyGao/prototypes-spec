@@ -2,10 +2,11 @@
 name: prototypes-spec
 slug: prototypes-spec
 displayName: prototypes-spec
-version: 1.2.1
+version: 1.3.0
 description: >
   从原型工具导出的 HTML 目录（或单个 HTML 文件）中自动识别页面结构、页面内容、控件和交互，
-  生成 PRD（产品需求文档）、功能清单、测试用例、数据字典等开发交付物。
+  生成 PRD（产品需求文档）、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划，
+  以及系统概要说明书、详细说明书、数据库设计说明书等开发交付物。
 
   支持的原型工具：
   - Axure RP（完整支持：页面树/控件/交互全提取）
@@ -21,6 +22,7 @@ description: >
   - 蓝湖、lanhu、蓝湖导出、蓝湖 schema
   - 原型转 PRD、原型转文档、原型生成文档、根据原型写需求、根据原型生成
   - 原型分析、解析原型、分析原型页面、原型提取
+  - 系统概要说明书、概要设计、详细说明书、详细设计、数据库设计说明书、数据库设计、表结构设计
   - 用户上传了 .html 文件或文件夹，并提到这是原型、设计稿、产品原型
   - 用户说"帮我从这个原型生成/输出/导出"等类似表述
   - 涉及 "原型" + "文档/PRD/需求/功能/测试" 的组合
@@ -289,14 +291,17 @@ python3 scripts/parse_axure.py <原型目录> --pages "1,3-7" --json > prototype
 > 5. 🔗 **页面跳转关系图** - md，含 Mermaid 流程图 + 跳转详表 + 孤立页面清单
 > 6. 🎯 **用户故事（User Story）** - md，含角色定义 + 故事地图 + 详表 + 验收标准汇总
 > 7. 📅 **开发计划** - md，含模块拆分表 + 4 里程碑 + 风险项
-> 8. 💡 **自定义组合** - 你指定格式
+> 8. 📘 **系统概要说明书** - md，含项目背景/建设目标/总体架构/模块划分/接口概要/非功能需求/实体概要
+> 9. 📗 **详细说明书** - md，按模块展开功能构成/处理流程/交互规则/异常处理/接口详细说明
+> 10. 📙 **数据库设计说明书** - md，含设计原则/逻辑模型/ER 图/物理表/字段/索引/数据安全
+> 11. 💡 **自定义组合** - 你指定格式
 
 **何时跳过询问直接生成**（避免让用户重复已经说清楚的事）：
 
 - 用户 prompt 中已明确指定要生成什么（如"生成 PRD"、"做一份功能清单和测试用例"、"分析页面"对应单页分析报告）→ **跳过询问，直接生成指定的交付物**，但仍先展示解析摘要让用户确认范围
 - 用户指定了输出格式（如"xlsx 格式"、"Markdown"、"Word"）→ 按指定格式输出，不问格式
 - 用户只说"分析这个原型"但未指定交付物 → **必须询问**要生成什么
-- 用户说"生成所有交付物"或"能生成的都生成" → 跳过询问，生成全部7类
+- 用户说"生成所有交付物"或"能生成的都生成" → 跳过询问，生成全部10类
 - **解析后发现的页面数/结构与用户描述严重不符**（如用户说"3个页面"实际解析到20个）→ **暂停，先告知差异让用户确认**，再继续生成
 
 这样做的原因：用户已经明确说出来的需求，再问一遍是冗余且让用户觉得"没被听见"；但模糊的指令必须澄清，避免做错方向。
@@ -316,6 +321,9 @@ python3 scripts/parse_axure.py <原型目录> --pages "1,3-7" --json > prototype
 | 📅 开发计划    | md   | `references/开发计划.md`         | `scripts/generate_dev_plan.py`     | 用户要生成开发计划时  |
 | 🔗 页面跳转关系图 | md   | `references/页面跳转关系图.md`      | `scripts/generate_page_flow.py`    | 用户要生成跳转关系图时 |
 | 🎯 用户故事    | md   | `references/用户故事.md`         | `scripts/generate_user_stories.py` | 用户要生成用户故事时  |
+| 📘 系统概要说明书 | md | `references/系统概要说明书.md` | `scripts/generate_spec_docs.py --doc-type system-overview` | 用户要生成系统概要说明书时 |
+| 📗 详细说明书 | md | `references/详细说明书.md` | `scripts/generate_spec_docs.py --doc-type detailed-design` | 用户要生成详细说明书时 |
+| 📙 数据库设计说明书 | md | `references/数据库设计说明书.md` | `scripts/generate_spec_docs.py --doc-type database-design` | 用户要生成数据库设计说明书时 |
 
 **工作分工**：
 
@@ -336,20 +344,39 @@ python3 scripts/generate_feature_list.py prototype.json output/功能清单.xlsx
 
 生成脚本接受统一参数：`<解析JSON> [输出路径]`，默认输出到 CWD。脚本内的推断函数（如 `infer_features_for_page`）实现了对应 reference 规范中描述的列定义、分组、便签纳入规则——若需调整推断逻辑，直接编辑脚本对应函数即可。
 
+三类说明书共用 `scripts/generate_spec_docs.py`，通过 `--doc-type` 指定文档类型：
+
+```bash
+# 系统概要说明书
+python3 scripts/generate_spec_docs.py prototype.json output/系统概要说明书.md --doc-type system-overview
+
+# 详细说明书
+python3 scripts/generate_spec_docs.py prototype.json output/详细说明书.md --doc-type detailed-design
+
+# 数据库设计说明书
+python3 scripts/generate_spec_docs.py prototype.json output/数据库设计说明书.md --doc-type database-design
+
+# 可选：覆盖项目名与版本号
+python3 scripts/generate_spec_docs.py prototype.json output/详细说明书.md \
+  --doc-type detailed-design --project-name "实例管理系统" --version v1.1.0
+```
+
 **各交付物生成要点**（列结构见步骤 4 交付物菜单；便签纳入规则见「便签/备注说明的解析与纳入」章节；详细规范以对应 reference 文件为准，生成前必须读取）：
 
-- PRD 由模型 inline 生成（结构灵活），其余 6 类交付物优先跑生成脚本产出文件
+- PRD 由模型 inline 生成（结构灵活），其余 9 类交付物优先跑生成脚本产出文件
 - PRD 的功能需求中，每个功能项在"功能描述"后按 `references/PRD-template.md` 增加「截图」与「相关页面」小节：「相关页面」嵌入该功能所属页面的原型截图（截图导出到 `output/screenshots/`，PRD 中用相对路径引用），「截图」放用户另行提供的现状界面截图（如有）；无对应素材的功能项省略小节
 - **截图询问（生成 PRD 前必做，不得静默省略截图小节）**：写 PRD 前向用户确认两件事——
   1. **「相关页面」原型截图**：Axure 等工具导出自带页面图片时，直接复制/导出到 `output/screenshots/`；原型为纯 HTML（页面无 `<img>` 素材）时，询问"是否将各页渲染为全页截图嵌入"（可用 Playwright/Chrome headless 渲染），用户同意后渲染导出，拒绝则省略「相关页面」小节
   2. **「截图」现状截图**：询问用户是否有现状界面截图需要纳入；有则请其提供文件路径并复制到 `output/screenshots/`，无则全部功能项省略「截图」小节
 - 测试用例的用例编号全局递增，不按模块重置
+- 三类说明书（系统概要/详细/数据库设计）共用 `generate_spec_docs.py`，生成后必须复核“待确认”项；字段类型、默认值、索引、接口均为建议，不得写成已确认结论
+- 数据库设计说明书不生成没有业务字段的空表；无法建表的页面在附录“未纳入表设计”中列出
 - 用户要求的输出格式与默认格式不同时（如测试用例要 md 而非 xlsx），仍按对应 reference 的列结构 inline 生成，不改变列定义
 
 ### 6. 输出文件管理
 
 - 所有输出存放在原型目录下的 `output/` 文件夹中
-- 按交付物类型单文件命名：`PRD.md`、`功能清单.xlsx`、`测试用例.xlsx`、`数据字典.md`、`页面跳转关系图.md`、`用户故事.md`、`开发计划.md`
+- 按交付物类型单文件命名：`PRD.md`、`功能清单.xlsx`、`测试用例.xlsx`、`数据字典.md`、`页面跳转关系图.md`、`用户故事.md`、`开发计划.md`、`系统概要说明书.md`、`详细说明书.md`、`数据库设计说明书.md`
 - **xlsx 单文件多 sheet**：功能清单/测试用例各自独立 xlsx，主表 + 副表「说明」共 2 张 sheet；不合并不同交付物到同一 xlsx
 - md 交付物各自独立单文件，不合并
 - 如果用户指定了输出位置，则保存到指定位置

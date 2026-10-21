@@ -33,5 +33,20 @@
     "id": 7,
     "prompt": "我这边有一个原型导出的 HTML 文件夹，但我不确定是什么工具导出的，在 ./unknown_prototype/ 下面，有十几个 html 文件和一些图片资源。请帮我分析这个原型，生成一份 PRD。",
     "expected": "识别工具为 unknown（退化 fallback）；扫描所有 HTML 提取文本和控件注释；生成 PRD.md；标注工具类型未识别为降级版本"
+  },
+  {
+    "id": 8,
+    "prompt": "请帮我分析 /Users/wikky/Documents/skills/specs temp/Net Scaler 这个 Axure 原型，生成一份系统概要说明书（Markdown 格式），包含项目背景、建设目标、总体架构、模块划分、核心业务流程、接口概要与非功能需求。",
+    "expected": "生成 系统概要说明书.md，含项目背景/建设目标/总体架构/模块划分/核心业务流程/接口概要/非功能需求/实体概要/风险；原型未体现的内容标注待确认，不编造业务背景"
+  },
+  {
+    "id": 9,
+    "prompt": "基于 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型，生成一份详细说明书（Markdown 格式），按模块展开功能构成、处理流程与交互、业务规则与异常处理，并给出接口详细说明。",
+    "expected": "生成 详细说明书.md，按模块组织；每个功能项有编号、描述、处理流程与异常规则；交互步骤过滤 Axure 运行时代码，缺失规则标注待确认"
+  },
+  {
+    "id": 10,
+    "prompt": "请根据 /Users/wikky/Documents/skills/specs temp/Net Scaler 原型生成数据库设计说明书（Markdown 格式），包含实体清单、ER 图、物理表结构、字段定义、索引设计和数据安全要求。",
+    "expected": "生成 数据库设计说明书.md，含逻辑模型/ER 图/物理表/字段/索引；每表含 id、created_at、updated_at；字段类型、默认值、索引标注建议或待确认，不生成无业务字段的空表"
   }
 ]
