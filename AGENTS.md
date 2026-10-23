@@ -23,12 +23,14 @@ git push github master && git push gitee master
 ### 2. 发布 skillhub.cn
 
 - 若版本号与线上 `latest` 相同 → **跳过发布**（平台不允许同版本重发，需要重发先 bump 版本）
-- 否则打包并发布。**平台仅接受文本类文件**，`prototypes-spec.skill`（zip 二进制）、`.DS_Store` 等会被 400 拒绝，必须排除：
+- 否则打包并发布。两条硬性排除规则：
+  1. **平台仅接受文本类文件**：`prototypes-spec.skill`（zip 二进制）、`.DS_Store` 等会被 400 拒绝
+  2. **仓库内部文件必须排除**（v1.5.0 因误打 `AGENTS.md` / `CLAUDE.md` / `deploy.sh` / `OPTIMIZATION_PLAN.md` / `project_memory.md` 触发安全扫描失败，12 类问题命中）：发布包只含 skill 功能文件（`SKILL.md` / `readme.md` / `_meta.json` / `package.json` / `references/` / `scripts/` / `test-prompts.json`）
 
 ```bash
 VER=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
 rm -f /tmp/prototypes-spec-hub-$VER.zip
-zip -rq /tmp/prototypes-spec-hub-$VER.zip . -x ".git/*" ".mimosa/*" ".atomcode/*" ".DS_Store" "*/.DS_Store" "prototypes-spec.skill" "*.zip"
+zip -rq /tmp/prototypes-spec-hub-$VER.zip . -x ".git/*" ".mimosa/*" ".atomcode/*" ".DS_Store" "*/.DS_Store" "prototypes-spec.skill" "*.zip" "AGENTS.md" "CLAUDE.md" "deploy.sh" "OPTIMIZATION_PLAN.md" "project_memory.md"
 skillhub publish /tmp/prototypes-spec-hub-$VER.zip --version $VER --changelog "<本次变更摘要>" --json
 ```
 

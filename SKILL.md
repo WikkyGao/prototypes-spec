@@ -2,7 +2,7 @@
 name: prototypes-spec
 slug: prototypes-spec
 displayName: prototypes-spec
-version: 1.5.0
+version: 1.5.1
 description: >
   从原型工具导出的 HTML 目录（或单个 HTML 文件）中自动识别页面结构、页面内容、控件和交互，
   生成 PRD（产品需求文档）、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划，

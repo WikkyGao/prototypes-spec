@@ -1,7 +1,7 @@
 {
   "name": "prototypes-spec",
   "display_name": "原型→开发交付物生成器",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "从原型工具导出的 HTML 目录中自动识别页面结构、控件和交互，生成 PRD、功能清单、测试用例、数据字典、页面跳转关系图、用户故事、开发计划，以及系统概要说明书、详细说明书、数据库设计说明书、试运行报告、维护手册、操作手册、应用软件清单、系统参数配置说明、培训计划、服务计划、功能与性能测试报告等开发交付物。",
   "description_en": "Parse prototype HTML exports (Axure, Mockplus, MasterGo, Lanhu) to auto-generate PRD, feature list, test cases, data dictionary, page flow diagrams, user stories, development plans, system overview, detailed design, database design, trial run report, maintenance manual, operation manual, application inventory, system parameter configuration, training plan, service plan, and combined functional/performance test report.",
   "author": {
@@ -146,6 +146,14 @@
     "通用 HTML 解析兜底"
   ],
   "changelog": [
+    {
+      "version": "1.5.1",
+      "date": "2026-10-23",
+      "changes": [
+        "fix: 重新打包发布，剔除误入的仓库内部文件（AGENTS.md/CLAUDE.md/deploy.sh/OPTIMIZATION_PLAN.md/project_memory.md），修复 skillhub 安全扫描失败",
+        "docs: AGENTS.md 打包命令补全内部文件排除清单"
+      ]
+    },
     {
       "version": "1.5.0",
       "date": "2026-10-23",
