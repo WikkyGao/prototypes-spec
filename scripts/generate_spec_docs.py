@@ -10,8 +10,12 @@
     python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type operation-manual
     python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type application-inventory
     python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type system-parameters
+    python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type training-plan
+    python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type service-plan
+    python3 scripts/generate_spec_docs.py <解析JSON> [输出路径] --doc-type test-report
 
-输入：parse_axure.py --json 输出的 JSON 文件路径
+输入：parse_axure.py --json 输出的 JSON 文件，或 PRD Markdown 文件。
+    也可用 --prd 在原型 JSON 基础上叠加 PRD 内容。
 输出：Markdown 文件；未指定输出路径时按文档类型使用默认文件名。
 """
 import argparse
@@ -34,7 +38,12 @@ DOC_TITLES = {
     'operation-manual': '操作手册',
     'application-inventory': '应用软件清单',
     'system-parameters': '系统参数配置说明',
+    'training-plan': '培训计划',
+    'service-plan': '服务计划',
+    'test-report': '功能与性能测试报告',
 }
+
+PRD_BASED_DOC_TYPES = {'training-plan', 'service-plan', 'test-report'}
 
 CATEGORY_LABELS = {
     'admin_console': '管理后台',
@@ -65,6 +74,9 @@ DEFAULT_OUTPUTS = {
     'operation-manual': '操作手册.md',
     'application-inventory': '应用软件清单.md',
     'system-parameters': '系统参数配置说明.md',
+    'training-plan': '培训计划.md',
+    'service-plan': '服务计划.md',
+    'test-report': '测试报告.md',
 }
 
 DEFAULT_NFR = [
@@ -561,6 +573,212 @@ def infer_acceptance(page, feature_type='main'):
     return criteria
 
 
+def strip_markdown_cell(text):
+    """去掉单元格两端的空白与 Markdown 强调符号，保留原始内容。"""
+    value = str(text or '').strip()
+    value = value.strip('`')
+    value = re.sub(r'^\*\*(.+?)\*\*$', r'\1', value)
+    return value.strip()
+
+
+def parse_markdown_table(lines):
+    """解析 Markdown 表格行，跳过表头分隔行。"""
+    rows = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith('|'):
+            continue
+        cells = [strip_markdown_cell(item) for item in stripped.strip('|').split('|')]
+        if not cells or all(not item for item in cells):
+            continue
+        if all(re.fullmatch(r':?-{2,}:?', item or '---') for item in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def normalize_priority_value(value, fallback='P1'):
+    """把 PRD 中的高/中/低或 P0/P1/P2 统一成 P0/P1/P2。"""
+    text = str(value or '').strip().upper()
+    if text in ('P0', 'P1', 'P2'):
+        return text
+    if any(word in text for word in ('高', '核心', '紧急', '严重')):
+        return 'P0'
+    if any(word in text for word in ('中', '重要')):
+        return 'P1'
+    if any(word in text for word in ('低', '一般')):
+        return 'P2'
+    return fallback
+
+
+def parse_prd_markdown(text, source_path=''):
+    """从 PRD Markdown 中提取项目名、角色与功能项，作为培训/服务/测试报告输入。"""
+    lines = text.splitlines()
+    project_name = ''
+    version = ''
+    roles = []
+    for line in lines:
+        if not project_name:
+            heading = re.match(r'^#\s+(.+?)\s*$', line.strip())
+            if heading:
+                project_name = re.sub(r'\s*产品需求文档\s*$', '', heading.group(1)).strip()
+        if not version:
+            match = re.search(r'版本\s*[:：]\s*v?([0-9][0-9A-Za-z.\-]*)', line)
+            if match:
+                version = match.group(1)
+    in_target_users = False
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r'^#{2,4}\s*(目标用户|用户角色|使用角色)\s*$', stripped):
+            in_target_users = True
+            continue
+        if in_target_users and re.match(r'^#{1,4}\s+', stripped):
+            in_target_users = False
+        if in_target_users:
+            match = re.match(r'^[-*+]\s+(.+)$', stripped)
+            if match:
+                role = re.sub(r'[*`]', '', match.group(1)).strip()
+                role = re.split(r'[（(：:]', role)[0].strip()
+                if role:
+                    roles.append({'name': role, 'description': 'PRD 目标用户'})
+
+    features = []
+    current_module = ''
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        module_match = re.match(r'^#{2,4}\s*模块\s*[0-9一二三四五六七八九十]*\s*[：:\-\.]?\s*(.+?)\s*$', line)
+        if module_match and not re.match(r'^#{3,5}\s*F-\d+', line, re.IGNORECASE):
+            current_module = re.sub(r'[*`]', '', module_match.group(1)).strip()
+            index += 1
+            continue
+        feature_match = re.match(r'^#{3,5}\s*(F-\d+)\s*[：:\-\.]?\s*(.+?)\s*$', line, re.IGNORECASE)
+        if not feature_match:
+            index += 1
+            continue
+
+        feature_id = feature_match.group(1).upper()
+        feature_name = re.sub(r'[*`]', '', feature_match.group(2)).strip()
+        block = []
+        index += 1
+        while index < len(lines) and not re.match(r'^#{2,4}\s+\S', lines[index].strip()):
+            block.append(lines[index])
+            index += 1
+
+        basic = {}
+        fields = []
+        actions = []
+        acceptance = []
+        description_lines = []
+        section = ''
+        for raw in block:
+            stripped = raw.strip()
+            heading = re.match(r'^\*\*(.+?)\*\*\s*$', stripped)
+            if heading:
+                section = heading.group(1).strip()
+                continue
+            if stripped.startswith('|'):
+                rows = parse_markdown_table([stripped])
+                if not rows:
+                    continue
+                cells = rows[0]
+                key = cells[0]
+                if key in ('属性', '字段名', '字段', '按钮/操作', '按钮', '操作'):
+                    continue
+                if section.startswith('基本信息'):
+                    if key in ('所属模块', '优先级', '页面', '操作角色', '角色') and len(cells) > 1:
+                        basic[key] = cells[1]
+                elif section.startswith(('字段说明', '数据字段')):
+                    description = cells[5] if len(cells) > 5 else ''
+                    required = cells[2] if len(cells) > 2 else '待确认'
+                    default = cells[4] if len(cells) > 4 else '待确认'
+                    fields.append({
+                        'name': '' if key in ('(待确认)', '待确认') else key,
+                        'label': key,
+                        'type': cells[1] if len(cells) > 1 else '待确认',
+                        'required': required or '待确认',
+                        'default': default or '待确认',
+                        'description': description or key,
+                        'note': '来自 PRD 字段说明',
+                        'page': basic.get('页面') or current_module,
+                    })
+                elif section.startswith(('按钮', '操作逻辑', '按钮/操作逻辑')):
+                    if key and key not in actions:
+                        actions.append(key)
+                continue
+            if section == '功能描述' and stripped and not stripped.startswith(('>', '-', '```', '!')):
+                description_lines.append(stripped)
+            match = re.match(r'^[-*+]\s*\[[ xX]\]\s*(.+)$', stripped)
+            if match:
+                acceptance.append(re.sub(r'[*`]', '', match.group(1)).strip())
+
+        name = feature_name
+        module = basic.get('所属模块') or current_module or '未分组'
+        feature = {
+            'id': feature_id,
+            'module': module,
+            'name': name,
+            'description': ' '.join(description_lines).strip() or f'实现「{name}」功能。',
+            'priority': normalize_priority_value(basic.get('优先级')),
+            'fields': fields,
+            'actions': actions,
+            'flow': [],
+            'business_rules': [],
+            'acceptance': acceptance or [f'「{name}」按 PRD 定义完成并可验证'],
+            'page': basic.get('页面') or module,
+            'role': basic.get('操作角色') or basic.get('角色') or '',
+        }
+        features.append(feature)
+
+    if not features:
+        raise ValueError('未能从 PRD 中解析到功能项（需要形如「#### F-001 功能名称」的标题）')
+
+    grouped = {}
+    for feature in features:
+        grouped.setdefault(feature['module'], []).append(feature['name'])
+    pages = []
+    for module, names in grouped.items():
+        pages.append({
+            'pageName': module,
+            'page_category': 'unknown',
+            'texts': names,
+            'widgets': {},
+            'interactions': [],
+            'notes': [],
+            'strict_fields': [],
+            'ambiguous_fields': [],
+            'filter_area': {},
+        })
+
+    if not roles:
+        roles = [{'name': '系统用户', 'description': 'PRD 未明确角色，待业务方确认'}]
+    return {
+        'project_name': project_name or '未命名项目',
+        'doc_version': version,
+        'prd_path': source_path,
+        'tool': 'PRD 文档',
+        'root_path': source_path or '未提供',
+        'source_kind': 'prd',
+        'pages': pages,
+        'prd_features': features,
+        'prd_modules': [{'name': module, 'features': [f for f in features if f['module'] == module]}
+                        for module in grouped],
+        'prd_roles': roles,
+    }
+
+
+def merge_prd_context(data, prd_data):
+    """把 PRD 解析结果叠加到原型 JSON 数据上，不覆盖原型页面。"""
+    merged = dict(data)
+    merged['prd_features'] = prd_data.get('prd_features') or []
+    merged['prd_modules'] = prd_data.get('prd_modules') or []
+    merged['prd_roles'] = prd_data.get('prd_roles') or []
+    merged['prd_path'] = prd_data.get('prd_path') or ''
+    if not merged.get('project_name'):
+        merged['project_name'] = prd_data.get('project_name')
+    return merged
+
+
 def build_features(pages):
     """把页面转换成功能项。"""
     features = []
@@ -650,6 +868,41 @@ def build_modules(pages, features):
             'features': page_features,
         })
     return modules
+
+
+def build_modules_from_features(features, pages=None):
+    """按功能项的 module 字段分组，兼容 PRD 输入。"""
+    page_categories = {
+        page.get('pageName'): page.get('page_category') or 'unknown'
+        for page in (pages or [])
+    }
+    modules = []
+    index_by_name = {}
+    for feature in features:
+        name = feature.get('module') or '未分组'
+        if name not in index_by_name:
+            index_by_name[name] = len(modules)
+            modules.append({
+                'name': name,
+                'category': page_categories.get(name, 'unknown'),
+                'page': None,
+                'features': [],
+            })
+        modules[index_by_name[name]]['features'].append(feature)
+    return modules
+
+
+def doc_features(data, pages):
+    """优先使用 PRD 功能项，否则回退到原型页面推断。"""
+    return data.get('prd_features') or build_features(pages)
+
+
+def doc_modules(data, pages, features):
+    return build_modules_from_features(features, pages)
+
+
+def doc_roles(data, pages):
+    return data.get('prd_roles') or infer_roles(pages)
 
 
 def build_entities(pages):
@@ -938,7 +1191,13 @@ def build_scenario_rows(modules):
         ('配置与发布', unique(config + publish), '维护配置内容，提交发布并查看版本状态', '发布成功后可查询版本与生效状态'),
         ('认证与权限', auth, '进入认证/登录相关页面，完成身份校验', '认证成功进入系统，失败提示原因'),
     ]
-    return [row for row in rows if row[1]]
+    filtered = [row for row in rows if row[1]]
+    if filtered:
+        return filtered
+    fallback = [module['name'] for module in modules][:6]
+    if not fallback:
+        return []
+    return [('核心业务操作', fallback, '按角色完成查询、录入、提交与结果核对', '操作成功并得到明确反馈')]
 
 
 def render_trial_run_report(data, pages, entities, skipped, version):
@@ -1483,6 +1742,549 @@ def render_system_parameters(data, pages, entities, skipped, version):
 
 
 
+def render_training_plan(data, pages, entities, skipped, version):
+    project_name = data.get('project_name') or '未命名项目'
+    features = doc_features(data, pages)
+    modules = doc_modules(data, pages, features)
+    roles = doc_roles(data, pages)
+    priority_counts = Counter(feature['priority'] for feature in features)
+    core_features = [feature for feature in features if feature['priority'] == 'P0']
+    focus_modules = [
+        module for module in modules
+        if '配置' in module['name'] or module['category'] in ('config_page', 'admin_console')
+    ]
+    source = 'PRD' if data.get('prd_features') else '原型解析数据'
+    lines = [render_doc_frontmatter(project_name, version, DOC_TITLES['training-plan'])]
+    is_prd = bool(data.get('prd_features'))
+    intro_pages = [{'pageName': module['name']} for module in modules] if is_prd else pages
+    lines.extend(render_intro(project_name, DOC_TITLES['training-plan'], intro_pages, data.get('tool'),
+                              data.get('root_path'), 'PRD' if is_prd else '原型',
+                              '模块' if is_prd else '页面'))
+
+    lines.extend(['## 2. 培训概述', '', '### 2.1 培训目标', '',
+                  f'本培训计划基于{source}整理，覆盖 {len(modules)} 个模块、{len(features)} 个功能项，'
+                  '目标是让不同角色在系统上线前掌握本职范围内的页面操作、业务规则与异常处理。', '',
+                  '- 使业务用户能够独立完成日常查询、录入、提交与结果核对',
+                  '- 使配置/管理人员掌握配置维护、权限边界与变更注意事项',
+                  '- 使运维与支持人员了解常见问题定位、反馈路径与升级机制',
+                  '- 通过考核确认培训效果，形成可追溯的培训记录', '',
+                  '### 2.2 培训对象', ''])
+    role_rows = []
+    for role in roles:
+        related = '、'.join(module['name'] for module in modules[:6]) or '全部模块'
+        role_rows.append((role['name'], role.get('description') or 'PRD 目标用户',
+                          related, '待确认'))
+    lines.extend(render_table(['角色', '职责', '主要涉及模块', '人数'], role_rows))
+    lines.extend(['', '### 2.3 培训范围', ''])
+    lines.extend(render_module_table(modules))
+    lines.extend(['', '### 2.4 培训前提与约束', ''])
+    lines.extend(render_table(
+        ['前提项', '要求', '确认状态'],
+        [('培训环境', '可访问的测试/预生产环境，数据与生产隔离', '待确认'),
+         ('账号权限', '按角色准备演示账号与最小权限', '待确认'),
+         ('培训教材', '操作手册、功能清单、演示脚本', '待确认'),
+         ('培训时间', '避开业务高峰，分批次组织', '待确认'),
+         ('培训数据', '使用脱敏或构造数据，禁止使用真实敏感数据', '待确认')]))
+
+    lines.extend(['', '## 3. 培训需求分析', '', '### 3.1 角色能力矩阵', ''])
+    matrix_rows = []
+    for role in roles:
+        duties = role.get('description') or '按角色权限使用系统'
+        matrix_rows.append((role['name'], duties,
+                            '、'.join(feature['name'] for feature in core_features[:5]) or '核心业务操作',
+                            '待确认'))
+    lines.extend(render_table(['角色', '能力要求', '重点功能', '建议课时'], matrix_rows))
+    lines.extend(['', '### 3.2 模块培训需求', ''])
+    module_rows = []
+    for module in modules:
+        module_features = module['features']
+        names = '、'.join(feature['name'] for feature in module_features[:4])
+        if len(module_features) > 4:
+            names += ' 等'
+        hours = max(1, min(4, len(module_features)))
+        module_rows.append((module['name'], len(module_features), names,
+                            '讲解+演示+实操', f'建议 {hours} 学时（待确认）'))
+    lines.extend(render_table(['模块', '功能项数', '核心功能', '培训方式', '建议课时'], module_rows))
+    lines.extend(['', '### 3.3 培训重点与难点', ''])
+    lines.append('- **高频核心功能**：' + (as_text([feature['name'] for feature in core_features[:8]])
+                                     if core_features else '待确认'))
+    lines.append('- **配置与权限**：' + (as_text([module['name'] for module in focus_modules[:8]])
+                                    if focus_modules else '原型/PRD 未识别到独立配置页面，按实际权限配置讲解'))
+    lines.append('- **易错业务规则**：必填校验、状态流转、审批/发布条件，按 PRD 与操作手册逐项演示')
+    lines.append('- **异常处理**：查询无结果、提交失败、权限不足、数据冲突时的提示与处理方式')
+    lines.append('- **数据安全**：脱敏要求、导出限制、账号共享与操作留痕要求')
+    lines.append('')
+
+    lines.extend(['## 4. 培训内容与课程安排', '', '### 4.1 课程大纲', ''])
+    course_rows = []
+    for index, module in enumerate(modules[:20], 1):
+        names = '、'.join(feature['name'] for feature in module['features'][:5])
+        course_rows.append((f'TR-{index:02d}', f'{module["name"]}功能培训', module['name'],
+                            names or '模块整体操作', '待确认', '讲解+演示+实操'))
+    lines.extend(render_table(['课程编号', '课程名称', '覆盖模块', '培训要点', '课时', '培训方式'],
+                              course_rows))
+    if len(modules) > 20:
+        lines.extend(['', f'> 模块数量超过 20 个，其余 {len(modules) - 20} 个模块按模块清单补充课程。'])
+    lines.extend(['', '### 4.2 分角色课程组合', ''])
+    combo_rows = []
+    for role in roles:
+        combo_rows.append((role['name'], '全部模块课程（按权限裁剪）',
+                           '配置/权限/安全相关课程', '实操考核'))
+    lines.extend(render_table(['角色', '必修课程', '选修课程', '考核方式'], combo_rows))
+    lines.extend(['', '### 4.3 操作演练场景', ''])
+    scenario_rows = []
+    for row in build_scenario_rows(modules):
+        scenario_rows.append((row[0], as_text(row[1]), row[2], row[3]))
+    lines.extend(render_table(['演练场景', '涉及模块', '操作要点', '预期结果'], scenario_rows,
+                              empty_row=['待补充', '原型/PRD 未提取到可演练场景', '待确认', '待确认']))
+
+    lines.extend(['', '## 5. 培训组织与实施', '', '### 5.1 培训方式', ''])
+    lines.extend(render_table(
+        ['方式', '适用对象', '说明'],
+        [('集中授课', '业务用户/管理员', '统一讲解系统范围、流程与规则'),
+         ('在线演示', '分散办公人员', '录屏或直播，便于回看'),
+         ('实操演练', '关键用户', '在测试环境按场景完成操作'),
+         ('一对一辅导', '配置/管理人员', '针对权限、配置与发布流程'),
+         ('文档自学', '全员', '操作手册、常见问题与视频教材')]))
+    lines.extend(['', '### 5.2 讲师与教材', ''])
+    lines.extend(render_table(
+        ['项目', '要求', '责任人', '确认状态'],
+        [('讲师', '熟悉业务规则与系统操作，建议由产品/实施/关键用户担任', '待确认', '待确认'),
+         ('教材', '操作手册、功能清单、演示脚本、练习题', '待确认', '待确认'),
+         ('演示环境', '与培训内容一致的测试环境', '待确认', '待确认'),
+         ('培训记录', '签到表、课件版本、考核结果', '待确认', '待确认')]))
+    lines.extend(['', '### 5.3 培训环境与数据', ''])
+    lines.extend(render_table(
+        ['项目', '要求', '确认状态'],
+        [('应用地址', '培训环境访问地址', '待确认'),
+         ('账号', '按角色准备演示账号', '待确认'),
+         ('数据', '脱敏/构造数据，覆盖正常与异常场景', '待确认'),
+         ('网络', '培训现场网络与访问权限', '待确认')]))
+    lines.extend(['', '### 5.4 培训日程', ''])
+    lines.extend(render_table(
+        ['阶段', '计划时间', '培训对象', '主要内容', '讲师'],
+        [('培训准备', '待确认', '项目组', '环境、账号、教材与演示脚本准备', '待确认'),
+         ('管理员培训', '待确认', '管理员/配置人员', '配置、权限、发布与审计', '待确认'),
+         ('业务用户培训', '待确认', '业务用户', '核心功能、操作流程与常见问题', '待确认'),
+         ('实操与答疑', '待确认', '关键用户', '按场景演练并收集问题', '待确认'),
+         ('考核与总结', '待确认', '全体培训对象', '考核、补训与培训总结', '待确认')]))
+
+    lines.extend(['', '## 6. 考核与效果评估', '', '### 6.1 考核方式', ''])
+    lines.extend(render_table(
+        ['考核方式', '适用对象', '内容', '合格标准'],
+        [('实操考核', '业务用户/管理员', '按岗位完成指定业务场景', '待确认'),
+         ('笔试/问卷', '全员', '功能范围、业务规则、安全要求', '待确认'),
+         ('现场问答', '关键用户', '异常处理与升级路径', '待确认')]))
+    lines.extend(['', '### 6.2 合格标准', ''])
+    lines.append('- 能独立完成本角色 100% 的核心操作场景（具体场景待确认）')
+    lines.append('- 能说明关键字段含义、必填要求与常见校验提示')
+    lines.append('- 能按流程反馈问题，不绕过权限或审批直接操作')
+    lines.append('- 考核未通过者安排补训与补考，记录留档')
+    lines.extend(['', '### 6.3 效果评估指标', ''])
+    lines.extend(render_table(
+        ['指标', '目标值', '数据来源', '备注'],
+        [('培训覆盖率', '待确认', '签到表', '应培训人数/实际培训人数'),
+         ('考核通过率', '待确认', '考核记录', '首次通过率与补考通过率'),
+         ('操作问题数量', '待确认', '支持工单/答疑记录', '上线后两周内的操作类问题'),
+         ('用户满意度', '待确认', '培训反馈问卷', '内容、讲师、组织安排'),
+         ('关键用户覆盖率', '待确认', '培训记录', '每个业务班组至少 1 名关键用户')]))
+
+    lines.extend(['', '## 7. 培训保障与风险', '', '### 7.1 组织保障', ''])
+    lines.append('- 明确培训负责人、讲师、关键用户与考勤记录人')
+    lines.append('- 培训前完成环境、账号、教材与演示数据检查')
+    lines.append('- 培训后归档课件、签到表、考核结果与问题清单')
+    lines.extend(['', '### 7.2 风险与应对', ''])
+    lines.extend(render_table(
+        ['风险项', '影响', '应对措施'],
+        [('培训时间不足', '用户不熟悉操作，上线后问题集中', '分批次培训，保留补训与录屏'),
+         ('环境不可用', '演示中断，影响培训效果', '提前检查并准备备用环境/截图'),
+         ('角色覆盖不全', '部分用户未掌握操作', '按角色清单核对签到与权限'),
+         ('业务规则变化', '培训内容与实际不一致', '以最新 PRD 和操作手册为准，培训前复核'),
+         ('培训数据不合规', '泄露真实敏感信息', '统一使用脱敏或构造数据')]))
+    lines.append('')
+    lines.extend(render_appendix('training-plan', data, pages, entities, skipped, version))
+    return '\n'.join(lines)
+
+
+def render_service_plan(data, pages, entities, skipped, version):
+    project_name = data.get('project_name') or '未命名项目'
+    features = doc_features(data, pages)
+    modules = doc_modules(data, pages, features)
+    roles = doc_roles(data, pages)
+    priority_counts = Counter(feature['priority'] for feature in features)
+    source = 'PRD' if data.get('prd_features') else '原型解析数据'
+    lines = [render_doc_frontmatter(project_name, version, DOC_TITLES['service-plan'])]
+    is_prd = bool(data.get('prd_features'))
+    intro_pages = [{'pageName': module['name']} for module in modules] if is_prd else pages
+    lines.extend(render_intro(project_name, DOC_TITLES['service-plan'], intro_pages, data.get('tool'),
+                              data.get('root_path'), 'PRD' if is_prd else '原型',
+                              '模块' if is_prd else '页面'))
+
+    lines.extend(['## 2. 服务概述', '', '### 2.1 服务目标', '',
+                  f'本服务计划基于{source}整理，覆盖 {len(modules)} 个模块、{len(features)} 个功能项，'
+                  '用于明确系统上线后的服务范围、服务级别、组织职责与工作流程。', '',
+                  '- 保障系统稳定运行，业务问题能够得到及时受理与闭环',
+                  '- 明确服务边界、响应时限、升级路径与考核方式',
+                  '- 规范变更、发布、巡检、备份与应急处理',
+                  '- 形成可追溯的服务记录与持续改进机制', '',
+                  '### 2.2 服务对象', ''])
+    service_roles = [role['name'] for role in roles]
+    lines.append('- 业务用户：' + (as_text(service_roles) if service_roles else '待确认'))
+    lines.append('- 系统管理员/配置人员：日常配置维护、权限管理与发布操作')
+    lines.append('- 运维与技术支持：部署、巡检、监控、故障处理与变更实施')
+    lines.append('- 外部依赖方：云平台、网络、第三方接口供应商（如涉及，待确认）')
+    lines.extend(['', '### 2.3 服务范围', ''])
+    lines.extend(render_module_table(modules))
+    lines.extend(['', '### 2.4 服务边界', ''])
+    lines.extend(render_table(
+        ['范围类型', '内容', '说明'],
+        [('包含', '应用功能支持、权限配置、日常巡检、故障受理、变更发布', '以合同/服务协议约定为准'),
+         ('包含', '接口连通性排查、日志查询、备份与恢复配合', '依赖方责任边界内配合'),
+         ('不包含', '用户终端与网络维护、第三方系统内部故障', '由相应责任方处理'),
+         ('不包含', '超出约定范围的新功能开发', '按变更或新增需求流程处理')]))
+
+    lines.extend(['', '## 3. 服务组织与职责', '', '### 3.1 服务团队角色', ''])
+    lines.extend(render_table(
+        ['服务角色', '主要职责', '建议人数', '责任人'],
+        [('服务经理', '服务统筹、SLA 考核、重大事件协调与客户沟通', '待确认', '待确认'),
+         ('一线支持', '受理、分类、常规问题处理与进度反馈', '待确认', '待确认'),
+         ('二线支持', '业务规则、配置与数据分析类问题处理', '待确认', '待确认'),
+         ('研发支持', '缺陷修复、代码级排查与版本发布', '待确认', '待确认'),
+         ('运维支持', '部署、巡检、监控、备份恢复与资源调整', '待确认', '待确认'),
+         ('DBA', '数据库性能、备份恢复与数据修复', '待确认', '待确认'),
+         ('安全负责人', '权限审计、安全事件响应与合规检查', '待确认', '待确认'),
+         ('供应商', '云资源、网络、第三方接口支持', '待确认', '待确认')]))
+    lines.extend(['', '### 3.2 职责分工', ''])
+    lines.extend(render_table(
+        ['事项', '负责(R)', '审批(A)', '协作(C)', '知会(I)'],
+        [('服务受理与分派', '一线支持', '服务经理', '二线支持', '业务方'),
+         ('重大故障处理', '二线/研发', '服务经理', '运维/供应商', '业务方'),
+         ('变更与发布', '研发/运维', '服务经理', '测试/业务', '一线支持'),
+         ('权限与账号', '系统管理员', '安全负责人', '一线支持', '业务方'),
+         ('数据恢复', 'DBA/运维', '服务经理', '研发', '业务方'),
+         ('服务报告', '服务经理', '项目负责人', '各支持组', '业务方')]))
+    lines.extend(['', '### 3.3 沟通与升级机制', ''])
+    lines.extend(render_table(
+        ['级别', '触发条件', '升级对象', '时限'],
+        [('一线处理', '常规咨询、操作指导、一般问题', '一线支持', '按 SLA'),
+         ('二线升级', '一线无法定位或涉及配置/数据', '二线支持', '待确认'),
+         ('研发升级', '疑似缺陷、接口异常、性能问题', '研发支持', '待确认'),
+         ('管理升级', '重大故障、SLA 即将超时、跨方协调', '服务经理/项目负责人', '待确认')]))
+
+    lines.extend(['', '## 4. 服务内容', '', '### 4.1 实施与上线服务', ''])
+    lines.append('- 环境部署、参数配置、数据库初始化与连通性验证')
+    lines.append('- 上线前检查、版本归档、备份与回滚演练')
+    lines.append('- 上线窗口值守与上线后观察')
+    lines.extend(['', '### 4.2 培训与推广服务', ''])
+    lines.append('- 按《培训计划》组织角色培训、关键用户培训与补训')
+    lines.append('- 提供操作手册、常见问题与演示材料')
+    lines.extend(['', '### 4.3 日常运维服务', ''])
+    lines.extend(render_table(
+        ['服务项', '内容', '频次', '责任方'],
+        [('系统巡检', '应用、数据库、中间件、磁盘、证书、日志', '待确认', '运维'),
+         ('监控告警', '可用性、响应时间、错误率、资源使用率', '持续', '运维'),
+         ('备份检查', '数据库与文件备份完整性、可恢复性', '待确认', 'DBA/运维'),
+         ('账号权限复核', '账号有效性、权限最小化、离职清理', '待确认', '系统管理员'),
+         ('日志与审计', '操作日志、安全日志、异常日志检查', '待确认', '运维/安全')]))
+    lines.extend(['', '### 4.4 故障响应与恢复', ''])
+    lines.extend(render_table(
+        ['故障级别', '典型场景', '响应要求', '恢复要求', '升级要求'],
+        [('P0 重大', '系统不可用、核心数据异常、严重安全事件', '待确认（建议 15 分钟内）',
+          '待确认（建议 4 小时内）', '立即上报服务经理与项目负责人'),
+         ('P1 高', '核心功能不可用或大面积受影响', '待确认（建议 30 分钟内）',
+          '待确认（建议 8 小时内）', '1 小时内升级二线/研发'),
+         ('P2 中', '一般功能异常，有替代方案', '待确认（建议 2 小时内）',
+          '待确认（建议 3 个工作日内）', '按需升级'),
+         ('P3 低', '咨询、建议、界面问题', '待确认（建议 1 个工作日内）',
+          '纳入版本计划', '无需升级')]))
+    lines.extend(['', '### 4.5 变更与发布服务', ''])
+    lines.extend(render_table(
+        ['环节', '要求', '产出'],
+        [('变更申请', '说明变更内容、影响范围、回滚方案与验证方式', '变更单'),
+         ('变更评审', '按风险等级由服务经理/业务/安全审批', '评审记录'),
+         ('变更实施', '在约定窗口执行，禁止无记录直接修改生产', '实施记录'),
+         ('变更验证', '验证核心功能、接口与监控指标', '验证记录'),
+         ('变更回滚', '异常时按预案回滚并复盘', '回滚记录/复盘报告')]))
+    lines.extend(['', '### 4.6 数据与安全服务', ''])
+    lines.append('- 数据备份、恢复演练与数据导出审批')
+    lines.append('- 账号权限申请、变更、复核与离职回收')
+    lines.append('- 安全事件受理、止损、取证与上报')
+    lines.append('- 日志脱敏、敏感数据访问审计与合规检查')
+    lines.extend(['', '### 4.7 巡检与健康检查', ''])
+    lines.extend(render_table(
+        ['检查项', '检查内容', '判定标准', '异常处理'],
+        [('应用服务', '进程状态、接口健康检查、错误日志', '无持续异常', '重启/回滚并排查'),
+         ('数据库', '连接数、慢查询、锁等待、磁盘空间', '在阈值内', '优化/扩容/清理'),
+         ('中间件', '缓存、消息队列、Web 服务器状态', '无堆积/无异常', '按组件手册处理'),
+         ('资源', 'CPU、内存、磁盘、网络', '在阈值内', '扩容或优化'),
+         ('证书与域名', '有效期、解析、链路', '未临近过期', '提前续期')]))
+
+    lines.extend(['', '## 5. 服务级别（SLA）', '', '### 5.1 服务级别定义', ''])
+    lines.extend(render_table(
+        ['级别', '定义', '适用对象', '考核方式'],
+        [('核心服务', '直接影响核心业务运行', '业务用户/管理员', '按月统计'),
+         ('一般服务', '影响部分功能或效率', '业务用户', '按月统计'),
+         ('支持服务', '咨询、培训、配置协助', '全员', '按季度统计')]))
+    lines.extend(['', '### 5.2 响应与恢复指标', ''])
+    lines.extend(render_table(
+        ['指标', '目标值', '统计口径', '备注'],
+        [('响应及时率', '待确认', '按时响应工单/工单总数', '按级别分别统计'),
+         ('故障恢复及时率', '待确认', '按时恢复工单/工单总数', 'P0/P1 单独统计'),
+         ('系统可用性', '待确认（建议 99.9%）', '可用时长/统计时长', '扣除约定维护窗口'),
+         ('一次解决率', '待确认', '首次处理即关闭工单/工单总数', '按问题类型统计'),
+         ('变更成功率', '待确认', '无回滚变更/变更总数', '按变更等级统计')]))
+    lines.extend(['', '### 5.3 服务计量与报告', ''])
+    lines.extend(render_table(
+        ['报告项', '周期', '内容', '提交对象'],
+        [('服务周报', '每周', '工单量、未结事项、风险提示', '项目组/业务方'),
+         ('服务月报', '每月', 'SLA 达成、故障统计、变更统计、改进建议', '服务经理/业务方'),
+         ('重大事件报告', '事件关闭后', '经过、影响、根因、整改与责任', '项目负责人/业务方'),
+         ('季度复盘', '每季度', '服务趋势、容量与优化建议', '管理层')]))
+
+    lines.extend(['', '## 6. 服务流程', '', '### 6.1 服务受理', ''])
+    lines.extend(render_table(
+        ['步骤', '输入', '处理动作', '输出', '责任方'],
+        [('受理', '电话/工单/群消息', '记录问题、环境、影响与联系方式', '服务工单', '一线支持'),
+         ('分类分级', '服务工单', '判断问题类型与故障级别', '分级结果', '一线支持'),
+         ('分派', '分级结果', '按责任组分派并跟踪', '处理人', '服务经理'),
+         ('处理', '工单与日志', '定位、修复或提供替代方案', '处理记录', '责任组'),
+         ('验证', '处理结果', '与用户确认问题是否解决', '验证结论', '一线支持'),
+         ('关闭', '验证结论', '填写根因、解决方案并关闭', '关闭工单', '一线支持')]))
+    lines.extend(['', '### 6.2 事件分级与处理', ''])
+    lines.append('- 事件分级依据业务影响、受影响用户范围、是否有替代方案综合判断')
+    lines.append('- P0/P1 事件必须建立事件群、指定指挥人并按固定节奏同步进展')
+    lines.append('- 处理过程记录时间点、操作人、关键结论与证据，禁止事后补记关键事实')
+    lines.extend(['', '### 6.3 问题管理', ''])
+    lines.append('- 重复出现或根因未明的事件转为问题单，指定责任人跟踪')
+    lines.append('- 问题关闭需有根因分析、整改措施与验证记录')
+    lines.extend(['', '### 6.4 变更管理', ''])
+    lines.append('- 所有生产变更走变更单，禁止口头或私下变更')
+    lines.append('- 高风险变更需准备回滚包、验证清单与值守安排')
+    lines.extend(['', '### 6.5 服务关闭与回访', ''])
+    lines.append('- 工单关闭前与用户确认结果，关闭后按需回访')
+    lines.append('- 对 P0/P1 事件和不满意工单进行复盘与改进跟踪')
+
+    lines.extend(['', '## 7. 服务资源与保障', '', '### 7.1 人员与工具', ''])
+    lines.extend(render_table(
+        ['资源类型', '内容', '状态'],
+        [('服务台/工单系统', '受理、分派、跟踪与统计', '待确认'),
+         ('监控平台', '可用性、接口、资源与日志监控', '待确认'),
+         ('知识库', '常见问题、处理手册、变更记录', '待确认'),
+         ('远程/现场支持', '按问题需要提供', '待确认'),
+         ('备件/备用环境', '关键资源故障时启用', '待确认')]))
+    lines.extend(['', '### 7.2 风险与应急预案', ''])
+    lines.extend(render_table(
+        ['风险项', '影响', '预防措施', '应急措施'],
+        [('核心服务不可用', '业务中断', '高可用部署、监控告警、容量评估', '切换/回滚/启用备用环境'),
+         ('数据损坏或误删', '数据不一致', '备份、权限控制、操作审计', '按备份恢复并核对数据'),
+         ('安全事件', '数据泄露/非法访问', '最小权限、审计、漏洞修复', '止损、取证、上报与整改'),
+         ('关键人员缺失', '处理延迟', 'AB 角、知识库、交接机制', '启用备份人员或供应商支持'),
+         ('第三方依赖故障', '部分功能不可用', 'SLA 约束、降级方案', '切换备用通道/人工处理')]))
+    lines.extend(['', '## 8. 服务持续改进', ''])
+    lines.append('- 每月复盘工单量、SLA 达成率、重复问题与变更成功率')
+    lines.append('- 将高频问题沉淀到知识库，更新操作手册与培训材料')
+    lines.append('- 对未达标项制定改进计划、责任人与完成时间，并在下一周期验证')
+    lines.append('')
+    lines.extend(render_appendix('service-plan', data, pages, entities, skipped, version))
+    return '\n'.join(lines)
+
+
+def render_test_report(data, pages, entities, skipped, version):
+    project_name = data.get('project_name') or '未命名项目'
+    features = doc_features(data, pages)
+    modules = doc_modules(data, pages, features)
+    priority_counts = Counter(feature['priority'] for feature in features)
+    core_features = [feature for feature in features if feature['priority'] == 'P0']
+    source = 'PRD' if data.get('prd_features') else '原型解析数据'
+    lines = [render_doc_frontmatter(project_name, version, DOC_TITLES['test-report'])]
+    is_prd = bool(data.get('prd_features'))
+    intro_pages = [{'pageName': module['name']} for module in modules] if is_prd else pages
+    lines.extend(render_intro(project_name, DOC_TITLES['test-report'], intro_pages, data.get('tool'),
+                              data.get('root_path'), 'PRD' if is_prd else '原型',
+                              '模块' if is_prd else '页面'))
+    lines.extend(['', '> 本文件同时包含**功能测试报告**与**性能测试报告**两部分，避免功能与性能结论分散。'
+                       '所有执行结果、指标与结论必须来自真实测试记录；无记录时统一标注“待执行/待确认”。', ''])
+
+    lines.extend(['## 2. 测试概述', '', '### 2.1 测试目的', '',
+                  f'本报告基于{source}整理，覆盖 {len(modules)} 个模块、{len(features)} 个功能项，'
+                  '用于验证功能实现与 PRD/原型的一致性，并评估系统在目标负载下的性能表现。', '',
+                  '- 验证核心功能、业务流程、权限与异常处理是否符合 PRD 与验收标准',
+                  '- 验证接口、数据与页面交互的完整性',
+                  '- 评估系统在预期并发与数据量下的响应时间、吞吐量与稳定性',
+                  '- 形成缺陷清单、性能瓶颈与上线建议', '',
+                  '### 2.2 测试范围', ''])
+    lines.extend(render_module_table(modules))
+    lines.extend(['', '### 2.3 测试依据', ''])
+    lines.append('- PRD / 原型页面与交互定义')
+    lines.append('- 功能清单与测试用例')
+    lines.append('- 接口定义、数据字典与非功能需求')
+    lines.append('- 业务方确认的验收标准与上线要求')
+    lines.extend(['', '### 2.4 测试环境', ''])
+    lines.extend(render_table(
+        ['环境项', '配置要求', '实际值', '确认状态'],
+        [('应用环境', '测试/预生产环境，版本与待上线版本一致', '待确认', '待确认'),
+         ('应用版本', '本次测试版本号与构建号', '待确认', '待确认'),
+         ('数据库', '类型、版本、数据量与生产接近', '待确认', '待确认'),
+         ('中间件', '缓存、消息队列、Web 服务器', '待确认', '待确认'),
+         ('服务器', 'CPU/内存/磁盘/网络配置', '待确认', '待确认'),
+         ('客户端', '浏览器/终端型号与版本', '待确认', '待确认'),
+         ('监控工具', 'APM、日志、数据库监控', '待确认', '待确认')]))
+    lines.extend(['', '### 2.5 测试组织与进度', ''])
+    lines.extend(render_table(
+        ['阶段', '计划时间', '参与角色', '主要工作'],
+        [('测试准备', '待确认', '测试/开发', '环境、数据、用例与脚本准备'),
+         ('功能测试', '待确认', '测试/业务', '执行用例、记录缺陷、回归验证'),
+         ('性能测试', '待确认', '测试/运维/开发', '压测脚本、基线测试、加压与调优'),
+         ('测试总结', '待确认', '项目组', '汇总结果、缺陷、风险与上线建议')]))
+
+    lines.extend(['', '## 3. 测试对象与策略', '', '### 3.1 测试对象', ''])
+    feature_rows = []
+    for feature in features[:60]:
+        feature_rows.append((feature['id'], feature['module'], feature['name'], feature['priority'],
+                             len(feature.get('acceptance') or [])))
+    lines.extend(render_table(['编号', '模块', '功能', '优先级', '验收标准数'], feature_rows,
+                              empty_row=['待补充', '-', '-', '-', '0']))
+    lines.extend(['', '### 3.2 测试类型与策略', ''])
+    lines.extend(render_table(
+        ['测试类型', '测试内容', '方法', '是否纳入'],
+        [('功能测试', '页面、字段、按钮、流程、规则', '黑盒用例 + 业务场景', '是'),
+         ('接口测试', '请求/响应、状态码、异常与幂等', '接口工具/自动化', '待确认'),
+         ('权限测试', '角色、菜单、按钮与数据权限', '多角色交叉验证', '待确认'),
+         ('兼容性测试', '浏览器/终端/分辨率', '目标矩阵抽样', '待确认'),
+         ('异常测试', '空值、超长、非法格式、并发冲突', '边界值 + 故障注入', '待确认'),
+         ('性能测试', '响应时间、吞吐量、并发、稳定性', '压测工具 + 监控', '是'),
+         ('安全测试', '认证、越权、注入、敏感信息', '安全扫描 + 人工验证', '待确认')]))
+    lines.extend(['', '### 3.3 测试准入与退出标准', ''])
+    lines.extend(render_table(
+        ['类型', '准入标准', '退出标准'],
+        [('功能测试', '版本可部署、核心流程可走通、用例与数据就绪',
+          'P0/P1 用例全部执行，阻塞缺陷清零，遗留缺陷有明确处理计划'),
+         ('性能测试', '功能基线稳定、压测环境与数据就绪、监控可用',
+          '目标场景完成，指标达到确认目标或形成明确优化结论')]))
+
+    lines.extend(['', '## 4. 功能测试报告', '', '### 4.1 功能测试方法', ''])
+    lines.append('- 以 PRD 功能项与验收标准为依据设计用例，覆盖正常、边界与异常场景')
+    lines.append('- 按模块执行，记录实际结果、证据与缺陷编号')
+    lines.append('- 缺陷修复后进行回归，回归通过后方可关闭')
+    lines.append('- 业务关键流程由业务方参与验收确认')
+    lines.extend(['', '### 4.2 用例执行汇总', ''])
+    lines.extend(render_table(
+        ['统计项', '数量', '说明'],
+        [('功能项总数', len(features), '来自 PRD/原型功能项'),
+         ('P0 功能', priority_counts.get('P0', 0), '核心功能'),
+         ('P1 功能', priority_counts.get('P1', 0), '重要功能'),
+         ('P2 功能', priority_counts.get('P2', 0), '一般功能'),
+         ('计划用例数', '待确认', '以测试用例文档为准'),
+         ('已执行用例数', '待执行', '测试完成后填写'),
+         ('通过用例数', '待执行', '测试完成后填写'),
+         ('失败用例数', '待执行', '测试完成后填写'),
+         ('阻塞用例数', '待执行', '测试完成后填写'),
+         ('用例通过率', '待确认', '通过数/已执行数')]))
+    lines.extend(['', '### 4.3 功能测试结果明细', ''])
+    result_rows = []
+    for feature in features[:60]:
+        result_rows.append((feature['id'], feature['module'], feature['name'], feature['priority'],
+                            '待执行', '-', '待确认'))
+    lines.extend(render_table(['编号', '模块', '功能', '优先级', '执行结果', '缺陷编号', '备注'],
+                              result_rows, empty_row=['待补充', '-', '-', '-', '待执行', '-', '待确认']))
+    lines.extend(['', '### 4.4 缺陷统计与分析', ''])
+    lines.extend(render_table(
+        ['统计项', '数量', '说明'],
+        [('缺陷总数', '待记录', '测试完成后填写'),
+         ('阻塞级', '待记录', '导致核心流程无法继续'),
+         ('严重级', '待记录', '核心功能异常或数据错误'),
+         ('一般级', '待记录', '非核心功能异常'),
+         ('建议级', '待记录', '体验与优化建议'),
+         ('已关闭', '待记录', '回归通过并关闭'),
+         ('遗留缺陷', '待记录', '需明确规避方案与修复计划')]))
+    lines.extend(['', '### 4.5 功能缺陷清单', ''])
+    lines.extend(render_table(
+        ['编号', '模块', '问题描述', '严重级别', '状态', '责任人', '计划修复时间'],
+        [('BUG-001', '待确认', '测试完成后补充现象、复现步骤、预期与实际', '待确认',
+          '待处理', '待确认', '待确认')]))
+    lines.extend(['', '### 4.6 功能测试结论', '',
+                  '待功能测试完成后填写：核心功能是否全部通过、遗留缺陷是否影响上线、'
+                  '是否需要回归或扩大测试范围。原型/PRD 只能说明“应测试什么”，不能替代真实执行记录。', ''])
+
+    lines.extend(['## 5. 性能测试报告', '', '### 5.1 性能测试目标', ''])
+    lines.extend(render_table(
+        ['指标', '目标值', '说明'],
+        [('页面平均响应时间', '待确认（建议 ≤ 2 秒）', '核心页面在正常负载下的平均响应'),
+         ('核心接口响应时间', '待确认（建议 P95 ≤ 500 毫秒）', '按接口分别设定'),
+         ('系统吞吐量', '待确认', '每秒/每分钟成功请求数'),
+         ('并发用户数', '待确认', '按业务峰值估算'),
+         ('错误率', '待确认（建议 < 1%）', '压测期间失败请求占比'),
+         ('CPU/内存使用率', '待确认（建议 < 80%）', '稳定压测期间的资源水位'),
+         ('稳定性运行时长', '待确认（建议 ≥ 2 小时）', '持续负载下无内存泄漏/连接耗尽')]))
+    lines.extend(['', '### 5.2 性能测试场景设计', ''])
+    scenario_source = core_features or features
+    scenario_rows = []
+    scenario_names = [
+        ('查询类场景', '列表查询、筛选、分页'),
+        ('提交类场景', '表单填写与提交'),
+        ('详情类场景', '详情查看与关联数据加载'),
+        ('混合业务场景', '按真实业务比例混合操作'),
+        ('稳定性场景', '持续负载下长时间运行'),
+    ]
+    for index, (name, description) in enumerate(scenario_names, 1):
+        related = '、'.join(feature['name'] for feature in scenario_source[:4]) or '待确认'
+        scenario_rows.append((f'PT-{index:02d}', name, description, related,
+                              '待确认', '待确认', '待确认'))
+    lines.extend(render_table(['编号', '场景', '业务描述', '关联功能', '并发数', '持续时间', '通过标准'],
+                              scenario_rows))
+    lines.extend(['', '### 5.3 测试数据与模型', ''])
+    lines.extend(render_table(
+        ['项目', '要求', '实际值', '确认状态'],
+        [('数据量', '与生产同量级或按比例缩放并说明', '待确认', '待确认'),
+         ('数据分布', '覆盖正常、边界与热点数据', '待确认', '待确认'),
+         ('压测模型', '并发用户、思考时间、操作比例', '待确认', '待确认'),
+         ('压测工具', 'JMeter/Locust/k6 等', '待确认', '待确认'),
+         ('监控采样', '应用、数据库、系统资源指标', '待确认', '待确认')]))
+    lines.extend(['', '### 5.4 性能指标汇总', ''])
+    lines.extend(render_table(
+        ['场景', '并发数', '平均响应时间', 'P95 响应时间', 'TPS/QPS', '错误率', '结论'],
+        [(row[0], row[4], '待执行', '待执行', '待执行', '待执行', '待确认')
+         for row in scenario_rows]))
+    lines.extend(['', '### 5.5 压测结果与趋势', '',
+                  '待压测完成后补充：各场景的响应时间曲线、TPS/QPS 趋势、资源使用曲线、'
+                  '错误分布与拐点分析。不得在无压测数据时填写“通过”。', ''])
+    lines.extend(['', '### 5.6 瓶颈分析与调优建议', ''])
+    lines.extend(render_table(
+        ['可能瓶颈', '判断依据', '调优方向', '验证方式'],
+        [('数据库慢查询', '慢查询日志、锁等待、CPU 高', '索引优化、SQL 改写、分页与缓存', '优化后重跑同场景'),
+         ('接口耗时', 'APM 调用链、单接口 P95 高', '减少串行调用、异步化、批量接口', '对比优化前后指标'),
+         ('缓存命中率低', '缓存命中率、回源请求量', '调整缓存键/过期策略、预热', '观察命中率与响应时间'),
+         ('连接池不足', '连接等待、超时错误', '调整连接池大小与超时', '压测验证错误率'),
+         ('资源不足', 'CPU/内存/磁盘/网络达到阈值', '扩容、限流、降级', '容量测试验证'),
+         ('前端资源过大', '页面加载瀑布图', '压缩、懒加载、CDN', '前端性能测试')]))
+    lines.append('')
+    lines.append('- 调优必须基于压测数据，禁止凭经验直接下结论')
+    lines.append('- 每次调优记录变更内容、前后指标与验证结论')
+    lines.append('- 未达标的场景明确是否阻塞上线、规避方案与后续优化计划')
+    lines.extend(['', '### 5.7 性能测试结论', '',
+                  '待性能测试完成后填写：目标场景是否达标、是否存在阻塞上线的性能风险、'
+                  '需要扩容或优化的项及验证结果。', ''])
+
+    lines.extend(['## 6. 测试结论与上线建议', '', '### 6.1 综合结论', ''])
+    lines.extend(render_table(
+        ['测试类型', '执行情况', '结论', '阻塞上线'],
+        [('功能测试', '待执行', '待确认', '待确认'),
+         ('性能测试', '待执行', '待确认', '待确认'),
+         ('接口/权限/兼容性', '待确认', '待确认', '待确认')]))
+    lines.extend(['', '### 6.2 遗留问题与风险', ''])
+    lines.extend(render_table(
+        ['问题/风险', '影响', '应对措施', '责任人', '计划完成时间'],
+        [('核心功能缺陷未关闭', '影响业务使用', '修复后回归，必要时缩小上线范围', '待确认', '待确认'),
+         ('性能指标未达标', '影响用户体验/稳定性', '扩容、优化或限流降级', '待确认', '待确认'),
+         ('测试覆盖不足', '存在未知缺陷', '补充用例与回归范围', '待确认', '待确认'),
+         ('环境与生产差异', '测试结论代表性不足', '补充预生产验证', '待确认', '待确认')]))
+    lines.extend(['', '### 6.3 上线建议', '',
+                  '待测试完成后填写“建议上线 / 有条件上线 / 不建议上线”，并列出限制条件、'
+                  '必须关闭的缺陷与上线后观察指标。', ''])
+    lines.extend(render_appendix('test-report', data, pages, entities, skipped, version))
+    return '\n'.join(lines)
+
+
 def render_doc_frontmatter(project_name, version, doc_title):
     today = datetime.date.today().isoformat()
     return '\n'.join([
@@ -1493,20 +2295,30 @@ def render_doc_frontmatter(project_name, version, doc_title):
     ])
 
 
-def render_intro(project_name, doc_title, pages, tool, root_path):
+def render_intro(project_name, doc_title, pages, tool, root_path, source_label='原型', unit='页面'):
     page_names = [page.get('pageName') or '未命名页面' for page in pages]
     if not page_names:
-        scope = '原型中未识别到可访问页面，适用范围待补充。'
+        scope = f'{source_label}中未识别到可访问{unit}，适用范围待补充。'
     elif len(page_names) <= 12:
-        scope = f'覆盖原型中的 {len(pages)} 个页面：{as_text(page_names)}。'
+        scope = f'覆盖{source_label}中的 {len(pages)} 个{unit}：{as_text(page_names)}。'
     else:
-        scope = f'覆盖原型中的 {len(pages)} 个页面，包括 {as_text(page_names[:12])} 等页面。'
+        scope = f'覆盖{source_label}中的 {len(pages)} 个{unit}，包括 {as_text(page_names[:12])} 等{unit}。'
+    if source_label == 'PRD':
+        first_term = ('PRD', '产品需求文档，包含功能项、角色、字段、验收标准与业务规则')
+        first_count = ('模块', 'PRD 功能清单中的一个业务模块')
+        reference_terms = [('输入来源', 'PRD 文档路径'), ('模块数量', str(len(pages)))]
+    else:
+        first_term = ('原型', '原型工具导出的 HTML/Schema 页面集合')
+        first_count = ('页面', '原型中的一个可访问页面或画板')
+        reference_terms = [('原型解析工具', as_text(tool, '未知')),
+                           ('原型根目录', as_text(root_path, '未提供')),
+                           ('页面数量', str(len(pages)))]
     glossary = [
-        ('原型', '原型工具导出的 HTML/Schema 页面集合'),
-        ('页面', '原型中的一个可访问页面或画板'),
+        first_term,
+        first_count,
         ('字段', '页面中出现的标签、控件或表格列推断出的数据项'),
         ('P0/P1/P2', '功能优先级：P0 核心、P1 重要、P2 一般'),
-        ('待确认', '原型未体现、需业务方/开发/DBA 确认的内容'),
+        ('待确认', '输入材料未体现、需业务方/开发/DBA 确认的内容'),
     ]
     purposes = {
         '系统概要说明书': f'本文档用于说明 {project_name} 的建设目标、总体架构、功能范围与非功能要求，作为设计评审、开发实现、测试验收与上线运维的依据。',
@@ -1517,6 +2329,9 @@ def render_intro(project_name, doc_title, pages, tool, root_path):
         '操作手册': f'本文档用于说明 {project_name} 的访问方式、角色权限与各功能操作步骤，作为最终用户培训与日常使用的依据。',
         '应用软件清单': f'本文档用于盘点 {project_name} 涉及的应用软件、基础组件、版本与许可信息，作为部署、采购与资产管理的依据。',
         '系统参数配置说明': f'本文档用于说明 {project_name} 的系统参数、业务参数、默认值与配置变更流程，作为部署实施与运维配置的依据。',
+        '培训计划': f'本文档用于规划 {project_name} 的培训目标、对象、课程、组织与考核安排，作为上线前用户培训与效果评估的依据。',
+        '服务计划': f'本文档用于明确 {project_name} 的服务范围、组织职责、服务级别与工作流程，作为上线后运维支持与服务考核的依据。',
+        '功能与性能测试报告': f'本文档用于记录 {project_name} 的功能测试与性能测试范围、执行结果、缺陷、指标与结论，作为上线决策的依据。',
     }
     purpose = purposes.get(doc_title, f'本文档用于说明 {project_name} 的{doc_title}相关内容。')
     lines = ['## 1. 引言', '', '### 1.1 编写目的', '', purpose, '',
@@ -1525,9 +2340,11 @@ def render_intro(project_name, doc_title, pages, tool, root_path):
     for term, definition in glossary:
         lines.append(f'| {cell(term)} | {cell(definition)} |')
     lines.extend(['', '### 1.4 参考资料', ''])
-    lines.append(f'- 原型解析工具：{as_text(tool, "未知")}')
-    lines.append(f'- 原型根目录：{as_text(root_path, "未提供")}')
-    lines.append(f'- 页面数量：{len(pages)}')
+    for label, value in reference_terms:
+        if label == '输入来源':
+            lines.append(f'- {label}：{as_text(root_path, value)}')
+        else:
+            lines.append(f'- {label}：{value}')
     lines.append('')
     return lines
 
@@ -1596,6 +2413,7 @@ def render_relations(relations):
 
 
 def render_source_note(doc_type, data, pages, entities, skipped):
+    is_prd = bool(data.get('prd_features'))
     notes_included = any(page.get('notes') for page in pages)
     ambiguous = []
     for page in pages:
@@ -1605,11 +2423,11 @@ def render_source_note(doc_type, data, pages, entities, skipped):
                 ambiguous.append(f'{page.get("pageName")}「{label}」')
     lines = ['### 数据来源说明', '']
     lines.append(f'- 解析工具：{as_text(data.get("tool"), "未知")}')
-    lines.append(f'- 原型目录：{as_text(data.get("root_path"), "未提供")}')
-    lines.append(f'- 覆盖页面：{len(pages)} 个')
+    lines.append(f'- {"PRD 路径" if is_prd else "原型目录"}：{as_text(data.get("root_path"), "未提供")}')
+    lines.append(f'- 覆盖{"模块" if is_prd else "页面"}：{len(pages)} 个')
     if entities:
         lines.append(f'- 推断实体：{len(entities)} 个（表名、字段名、类型、索引均为建议，需后端/DBA 确认）')
-    if skipped:
+    if skipped and not is_prd:
         lines.append(f'- 未纳入表设计的页面：{as_text(skipped)}')
     note_targets = {
         'system-overview': '功能描述、功能边界或待确认项',
@@ -1620,14 +2438,20 @@ def render_source_note(doc_type, data, pages, entities, skipped):
         'operation-manual': '操作步骤、字段说明或待确认项',
         'application-inventory': '软件条目、版本信息或待确认项',
         'system-parameters': '参数说明、默认值或待确认项',
+        'training-plan': '培训内容、课程安排或待确认项',
+        'service-plan': '服务内容、SLA 或待确认项',
+        'test-report': '测试范围、场景、缺陷或待确认项',
     }
     if notes_included:
         lines.append(f'- 便签/矩形内备注说明已纳入{note_targets.get(doc_type, "功能描述或待确认项")}')
     else:
-        lines.append('- 未发现便签/矩形内备注说明')
+        lines.append('- PRD 未包含便签/备注说明' if is_prd else '- 未发现便签/矩形内备注说明')
     if ambiguous:
         lines.append(f'- 模糊字段 {len(ambiguous)} 个，需先确认：{as_text(ambiguous[:10])}')
-    lines.append('- 字段类型优先取控件类型，缺失时按标签推断；必填、默认值、校验规则原型未体现时标“待确认”')
+    if is_prd:
+        lines.append('- 字段类型与验收标准取自 PRD；PRD 未明确的必填、默认值、校验规则标“待确认”')
+    else:
+        lines.append('- 字段类型优先取控件类型，缺失时按标签推断；必填、默认值、校验规则原型未体现时标“待确认”')
     lines.append('')
     return lines
 
@@ -1643,7 +2467,7 @@ def render_appendix(doc_type, data, pages, entities, skipped, version):
                 pending.append(f'`{page_name}` 字段「{label}」：{reason}')
         if page.get('is_screenshot_composite'):
             pending.append(f'`{page_name}`：检测到截图拼接（{as_text(page.get("screenshot_evidence"), "无证据")}），字段与控件可能提取不全')
-    if not entities:
+    if not entities and doc_type in ('database-design', 'system-overview', 'detailed-design'):
         pending.append('原型未识别到可用字段，实体与表设计待补充')
     if doc_type == 'database-design':
         pending.append('表名、字段名、字段类型、长度、索引均为原型推断建议，需后端与 DBA 最终确认')
@@ -1665,9 +2489,21 @@ def render_appendix(doc_type, data, pages, entities, skipped, version):
     elif doc_type == 'system-parameters':
         pending.append('参数默认值、取值范围、生效方式与敏感级别原型未体现，需开发与运维补充')
         pending.append('业务参数由配置页面字段推断，是否作为系统参数需业务方确认')
+    elif doc_type == 'training-plan':
+        pending.append('培训时间、地点、人数、讲师与考核标准需培训组织方补充')
+        pending.append('课程课时为按功能项数量给出的建议值，需结合受众基础与培训时长确认')
+        pending.append('培训环境、账号与演示数据需在培训前准备并验证')
+    elif doc_type == 'service-plan':
+        pending.append('服务组织、人员姓名、联系方式、服务窗口与合同约定需服务提供方补充')
+        pending.append('SLA 目标值、响应/恢复时限与考核口径需双方确认后生效')
+        pending.append('监控工具、工单系统、知识库与备份策略需结合实际运维环境核实')
+    elif doc_type == 'test-report':
+        pending.append('测试环境、执行时间、测试人员、用例执行记录与缺陷编号需测试团队补充')
+        pending.append('性能目标值、并发模型、数据量与压测结果原型/PRD 未体现，需在性能测试后填写')
+        pending.append('功能与性能结论必须基于真实测试记录，不得仅凭 PRD 直接判定通过')
     else:
         pending.append('业务背景、建设目标、技术栈、部署方式原型未体现，需业务方补充')
-    if skipped:
+    if skipped and not data.get('prd_features'):
         pending.append(f'以下页面未纳入表设计：{as_text(skipped)}')
 
     lines = ['## 附录', '', '### 待确认事项', '']
@@ -2097,25 +2933,56 @@ def generate_document(data, doc_type, version='1.0.0', project_name=None):
         return render_application_inventory(data, pages, entities, skipped, version)
     if doc_type == 'system-parameters':
         return render_system_parameters(data, pages, entities, skipped, version)
+    if doc_type == 'training-plan':
+        return render_training_plan(data, pages, entities, skipped, version)
+    if doc_type == 'service-plan':
+        return render_service_plan(data, pages, entities, skipped, version)
+    if doc_type == 'test-report':
+        return render_test_report(data, pages, entities, skipped, version)
     raise ValueError(f'不支持的文档类型：{doc_type}')
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='从原型解析 JSON 生成系统概要/详细/数据库设计/试运行/维护/操作/软件清单/参数配置文档')
-    parser.add_argument('json_path', help='parse_axure.py --json 输出的 JSON 文件')
+        description='从原型解析 JSON 或 PRD Markdown 生成系统概要/详细/数据库设计/试运行/维护/操作/'
+                    '软件清单/参数配置/培训计划/服务计划/功能与性能测试报告')
+    parser.add_argument('json_path', help='parse_axure.py --json 输出的 JSON 文件，或 PRD Markdown 文件')
     parser.add_argument('output_path', nargs='?', help='输出 Markdown 路径')
     parser.add_argument('--doc-type', required=True, choices=sorted(DOC_TITLES),
                         help='文档类型')
+    parser.add_argument('--prd', help='可选：PRD Markdown 路径，按 PRD 生成培训计划/服务计划/测试报告')
     parser.add_argument('--version', default='1.0.0', help='文档版本号（默认 1.0.0）')
-    parser.add_argument('--project-name', help='覆盖解析 JSON 中的项目名称')
+    parser.add_argument('--project-name', help='覆盖输入数据中的项目名称')
     args = parser.parse_args()
 
-    with open(args.json_path, 'r', encoding='utf-8') as file:
-        data = json.load(file)
+    input_path = Path(args.json_path)
+    if input_path.suffix.lower() in ('.md', '.markdown'):
+        if args.doc_type not in PRD_BASED_DOC_TYPES:
+            raise SystemExit('PRD Markdown 输入仅支持培训计划/服务计划/测试报告；'
+                             '其他文档请传入 parse_axure.py --json 生成的 JSON')
+        with open(input_path, 'r', encoding='utf-8') as file:
+            try:
+                data = parse_prd_markdown(file.read(), str(input_path))
+            except ValueError as error:
+                raise SystemExit(f'PRD 解析失败：{error}')
+    else:
+        with open(input_path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+
+    if args.prd:
+        prd_path = Path(args.prd)
+        if not prd_path.exists():
+            raise SystemExit(f'PRD 文件不存在：{prd_path}')
+        with open(prd_path, 'r', encoding='utf-8') as file:
+            try:
+                prd_data = parse_prd_markdown(file.read(), str(prd_path))
+            except ValueError as error:
+                raise SystemExit(f'PRD 解析失败：{error}')
+        data = merge_prd_context(data, prd_data)
+
     pages = data.get('pages') or []
     if not pages:
-        print('警告: 解析 JSON 中没有 pages，生成内容将大量标注“待补充”', file=sys.stderr)
+        print('警告: 输入数据中没有 pages，生成内容将大量标注“待补充”', file=sys.stderr)
 
     content = generate_document(data, args.doc_type, args.version, args.project_name)
     output_path = args.output_path or DEFAULT_OUTPUTS[args.doc_type]

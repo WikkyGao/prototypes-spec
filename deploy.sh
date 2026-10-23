@@ -10,6 +10,7 @@ DESTS=(
   "$HOME/.cc-switch/skills/prototypes-spec"
   "$HOME/.agents/skills/prototypes-spec"
   "$HOME/.agnes/skills/prototypes-spec"
+  "$HOME/.workbuddy/skills/prototypes-spec"
 )
 
 for DEST in "${DESTS[@]}"; do
