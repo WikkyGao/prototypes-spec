@@ -27,9 +27,9 @@ git push github master && git push gitee master
 
 ```bash
 VER=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
-rm -f prototypes-spec-hub-*.zip
-zip -rq prototypes-spec-hub-$VER.zip . -x ".git/*" ".mimosa/*" ".atomcode/*" ".DS_Store" "*/.DS_Store" "prototypes-spec.skill" "*.zip"
-skillhub publish prototypes-spec-hub-$VER.zip --version $VER --changelog "<本次变更摘要>" --json
+rm -f /tmp/prototypes-spec-hub-$VER.zip
+zip -rq /tmp/prototypes-spec-hub-$VER.zip . -x ".git/*" ".mimosa/*" ".atomcode/*" ".DS_Store" "*/.DS_Store" "prototypes-spec.skill" "*.zip"
+skillhub publish /tmp/prototypes-spec-hub-$VER.zip --version $VER --changelog "<本次变更摘要>" --json
 ```
 
 - 发布返回 JSON 中 `tags.latest` 必须已指向新版本；`reviewStatus: pending` 属正常（审核异步）
